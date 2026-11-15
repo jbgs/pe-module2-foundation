@@ -6,12 +6,17 @@ data "aws_caller_identity" "current" {}
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
-  repo       = "${var.github_owner}/${var.github_repo}"
 
   # The `sub` claim is what pins a role to this repository and to a specific kind of run.
   # Without a tight condition on it, any repository on GitHub could assume the role.
-  sub_pull_request = "repo:${local.repo}:pull_request"
-  sub_main_branch  = "repo:${local.repo}:ref:refs/heads/main"
+  #
+  # GitHub now issues the subject with the immutable numeric IDs of the owner and the repository
+  # (owner@id/repo@id). The IDs make the condition resistant to rename and recreate: a repository
+  # deleted and recreated under the same name, by anyone, has a different ID and cannot assume
+  # these roles. The plain name form (repo:owner/repo:...) no longer matches what GitHub sends.
+  sub_prefix       = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+  sub_pull_request = "${local.sub_prefix}:pull_request"
+  sub_main_branch  = "${local.sub_prefix}:ref:refs/heads/main"
 
   oidc_host = "token.actions.githubusercontent.com"
 
