@@ -256,6 +256,33 @@ data "aws_iam_policy_document" "apply" {
     resources = ["*"]
   }
 
+  # Network for the dev service: a VPC with public subnets and an internet gateway, no NAT. The
+  # EC2 API cannot scope these create actions by name prefix, so they are the widest part of the
+  # role. This block was added in a reviewed pull request, when the environment needed it.
+  statement {
+    sid = "Ec2Network"
+    actions = [
+      "ec2:CreateVpc",
+      "ec2:DeleteVpc",
+      "ec2:ModifyVpcAttribute",
+      "ec2:CreateSubnet",
+      "ec2:DeleteSubnet",
+      "ec2:ModifySubnetAttribute",
+      "ec2:CreateInternetGateway",
+      "ec2:DeleteInternetGateway",
+      "ec2:AttachInternetGateway",
+      "ec2:DetachInternetGateway",
+      "ec2:CreateRouteTable",
+      "ec2:DeleteRouteTable",
+      "ec2:CreateRoute",
+      "ec2:DeleteRoute",
+      "ec2:AssociateRouteTable",
+      "ec2:DisassociateRouteTable",
+      "ec2:ModifySecurityGroupRules",
+    ]
+    resources = ["*"]
+  }
+
   # IAM: only roles with the lab prefix, and every new role must carry the permissions boundary,
   # so the apply role cannot mint a more powerful role than the boundary allows.
   statement {
