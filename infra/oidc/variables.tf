@@ -33,6 +33,30 @@ variable "github_repo" {
   default     = "pe-module2-foundation"
 }
 
+# These two numbers are public: they are in the repository's page on GitHub's API
+# (https://api.github.com/repos/<owner>/<repo>, fields id and owner.id).
+variable "github_owner_id" {
+  description = "Immutable numeric ID of the GitHub owner, as it appears in the token subject."
+  type        = string
+  default     = "29926047"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_owner_id))
+    error_message = "github_owner_id must be numeric."
+  }
+}
+
+variable "github_repo_id" {
+  description = "Immutable numeric ID of the GitHub repository, as it appears in the token subject."
+  type        = string
+  default     = "1459148559"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repo_id))
+    error_message = "github_repo_id must be numeric."
+  }
+}
+
 variable "name_prefix" {
   description = "Prefix for every role, policy and resource this lab may create."
   type        = string

@@ -19,6 +19,15 @@ plan but never change infrastructure. Only a run on `main`, which a reviewed mer
 Each trust policy pins the token `sub` claim to this repository (and, for apply, to `main`).
 Without that condition, any repository on GitHub could assume the role.
 
+GitHub issues the subject with the **immutable numeric IDs** of the owner and the repository
+(`repo:<owner>@<owner id>/<repo>@<repo id>:...`), not the plain names. The trust policies match that
+form. It is also safer: a repository deleted and recreated under the same name has a different ID
+and cannot assume these roles. The two IDs are public (`https://api.github.com/repos/<owner>/<repo>`).
+
+If a run is refused with `Not authorized to perform sts:AssumeRoleWithWebIdentity`, CloudTrail (event
+`AssumeRoleWithWebIdentity`) records the real subject in the caller's user name, so it can be compared
+with the condition.
+
 ## Inputs (never committed)
 
 Supply locally in a git-ignored `oidc.auto.tfvars`:

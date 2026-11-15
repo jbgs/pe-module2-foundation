@@ -51,9 +51,24 @@ The container image is built in CI, so Docker is not required on a laptop.
 ## Status
 
 - [x] Repository and structure
-- [ ] Remote state bootstrap
-- [ ] OIDC trust between GitHub Actions and AWS
-- [ ] Reproducible dev environment, proven by destroy and recreate
-- [ ] Delivery pipeline with automated rollback
+- [x] Remote state bootstrap
+- [x] OIDC trust between GitHub Actions and AWS
+- [x] Reproducible dev environment (applied)
+- [x] Minimal service, tests and container image
+- [ ] Delivery pipeline: build, plan, apply, verify, rollback (this change)
+- [ ] Destroy and recreate proof
 - [ ] AI in the pipeline
 - [ ] Rationale and proof for the hand-in
+
+## Pipeline secrets
+
+The pipeline needs three repository secrets. They are secrets, not variables, because the logs of a
+public repository are public and only secrets are masked there.
+
+| Secret | What it is |
+|---|---|
+| `AWS_ACCOUNT_ID` | The lab AWS account ID |
+| `TF_STATE_BUCKET` | Name of the remote state bucket |
+| `ALLOWED_INGRESS_CIDR` | The one address allowed to reach the service, as a /32 |
+
+Optional repository variable: `SCAN_GATE=block` makes a CRITICAL image finding stop the deploy.
