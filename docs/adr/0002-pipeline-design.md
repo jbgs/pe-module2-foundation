@@ -21,7 +21,8 @@ and reversible, defined as code, and safe in a public repository where logs are 
 | Switching on | The pipeline never turns the service on or off by itself; a merge keeps the current size |
 | Rollback | Manual: deploy an older tag. Automatic: the ECS deployment circuit breaker |
 | Verification | Through the ECS API: the running image tag must equal the requested one |
-| Scan | Reported on every build; blocks on CRITICAL only when `SCAN_GATE=block` |
+| Scan | Reported on every build; blocks on CRITICAL only when `SCAN_GATE=block`. A missing scan result is reported as **NOT SCANNED** and, with the gate on, stops the run: no result is not the same as no findings |
+| Image format | Built with `--provenance=false --sbom=false`, so the tag points at a single image the registry can scan |
 
 ## Why verification goes through the ECS API
 
@@ -36,6 +37,14 @@ check would report success; this check fails the run.
 - **After the outcome is known:** the audit record (who or what changed what, which version, which approval).
 - **Human gate:** a GitHub environment with required reviewers on the deploy job. It changes the token
   subject, so the apply role's trust policy is updated at the same time, in a reviewed pull request.
+
+## A lesson from the first deploy
+
+The first deploy reported a successful scan step, yet the registry held no scan for the image. BuildKit
+had published an image index with an attestation manifest, which the registry's basic scan does not
+analyse, and the step had been written to pass when the scan did not complete. Both were fixed: the image
+is built without the extra manifest, and a missing scan is now reported as not scanned and, with the gate
+on, stops the run. A check that passes silently when it cannot run is worse than no check.
 
 ## Consequences
 

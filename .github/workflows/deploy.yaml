@@ -94,7 +94,11 @@ jobs:
           if aws ecr describe-images --repository-name "${REPOSITORY}" --image-ids imageTag="${TAG}" > /dev/null 2>&1; then
             echo "Image ${TAG} already exists, skipping the build"
           else
-            docker build --build-arg APP_VERSION="${TAG}" -t "${REGISTRY}/${REPOSITORY}:${TAG}" app
+            # No provenance or SBOM manifest: by default BuildKit publishes an image index with an
+            # attestation next to the image, and the registry's scan does not analyse an index, so
+            # the tag would point at something that is never scanned.
+            docker build --provenance=false --sbom=false \
+              --build-arg APP_VERSION="${TAG}" -t "${REGISTRY}/${REPOSITORY}:${TAG}" app
             docker push "${REGISTRY}/${REPOSITORY}:${TAG}"
           fi
 
@@ -113,12 +117,30 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
           SCAN_GATE: ${{ vars.SCAN_GATE }}
         run: |
-          aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" --image-id imageTag="${TAG}" || {
-            echo "Scan did not complete in time"
+          # No scan result is not the same as no findings. Say so loudly, and fail closed when the
+          # gate is on, instead of reporting a scan that never happened as a success.
+          not_scanned() {
+            echo "::warning::Image ${TAG} was NOT scanned: $1"
+            {
+              echo '### Image scan'
+              echo "**NOT SCANNED**: $1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "${SCAN_GATE:-}" = "block" ]; then
+              echo "SCAN_GATE=block and there is no scan result: stopping before apply" >&2
+              exit 1
+            fi
             exit 0
           }
+
+          if ! ERR="$(aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" \
+            --image-id imageTag="${TAG}" 2>&1)"; then
+            not_scanned "the scan did not complete (${ERR:0:200})"
+          fi
           COUNTS="$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" \
-            --image-id imageTag="${TAG}" --query 'imageScanFindings.findingSeverityCounts' --output json)"
+            --image-id imageTag="${TAG}" --query 'imageScanFindings.findingSeverityCounts' \
+            --output json)" || not_scanned "no scan result for this image"
+          [ "${COUNTS}" = "null" ] && COUNTS='{}'
+
           {
             echo '### Image scan'
             echo '```json'
