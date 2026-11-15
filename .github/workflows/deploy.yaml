@@ -120,10 +120,13 @@ jobs:
           # No scan result is not the same as no findings. Say so loudly, and fail closed when the
           # gate is on, instead of reporting a scan that never happened as a success.
           not_scanned() {
-            echo "::warning::Image ${TAG} was NOT scanned: $1"
+            # One line only: a workflow command ends at the first newline, and the CLI starts its
+            # errors with a blank line, which hid the cause of the first warning.
+            MSG="$(printf '%s' "$1" | tr '\n' ' ')"
+            echo "::warning::Image ${TAG} was NOT scanned: ${MSG}"
             {
               echo '### Image scan'
-              echo "**NOT SCANNED**: $1"
+              echo "**NOT SCANNED**: ${MSG}"
             } >> "$GITHUB_STEP_SUMMARY"
             if [ "${SCAN_GATE:-}" = "block" ]; then
               echo "SCAN_GATE=block and there is no scan result: stopping before apply" >&2
@@ -132,14 +135,36 @@ jobs:
             exit 0
           }
 
-          if ! ERR="$(aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" \
-            --image-id imageTag="${TAG}" 2>&1)"; then
-            not_scanned "the scan did not complete (${ERR:0:200})"
-          fi
-          COUNTS="$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" \
-            --image-id imageTag="${TAG}" --query 'imageScanFindings.findingSeverityCounts' \
-            --output json)" || not_scanned "no scan result for this image"
-          [ "${COUNTS}" = "null" ] && COUNTS='{}'
+          # The scan record is created a moment after the push, so "not found" means "not yet".
+          # Poll for it instead of using the CLI waiter, which treats "not found" as a failure and
+          # reported a scan as missing when it completed nine seconds later.
+          flatten() { tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-200; }
+          WAIT="${SCAN_WAIT_SECONDS:-150}"
+          DEADLINE=$((SECONDS + WAIT))
+          STATUS=""
+          COUNTS=""
+          while :; do
+            if OUT="$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" \
+              --image-id imageTag="${TAG}" --output json 2>&1)"; then
+              STATUS="$(echo "${OUT}" | jq -r '.imageScanStatus.status // "UNKNOWN"')"
+              case "${STATUS}" in
+                COMPLETE)
+                  COUNTS="$(echo "${OUT}" | jq -c '.imageScanFindings.findingSeverityCounts // {}')"
+                  break
+                  ;;
+                FAILED)
+                  not_scanned "the scan failed ($(echo "${OUT}" | jq -r '.imageScanStatus.description // "no detail"' | flatten))"
+                  ;;
+              esac
+            elif [[ "${OUT}" != *ScanNotFoundException* ]]; then
+              # Anything other than "not found yet" is a real error: do not keep waiting.
+              not_scanned "could not read the scan ($(echo "${OUT}" | flatten))"
+            fi
+            if [ "${SECONDS}" -ge "${DEADLINE}" ]; then
+              not_scanned "no completed scan after ${WAIT}s (last status: ${STATUS:-none})"
+            fi
+            sleep "${SCAN_POLL_SECONDS:-5}"
+          done
 
           {
             echo '### Image scan'
