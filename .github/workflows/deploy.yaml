@@ -82,6 +82,24 @@ jobs:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-apply
           aws-region: ${{ env.AWS_REGION }}
 
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # The image has to be pushed before the service can run it, so the registry has to exist
+      # before the build. On a first run, or after the environment was destroyed, it does not. Apply
+      # only the registry first. This is idempotent and a no-op when it already exists; the full
+      # apply below still manages everything else, including the registry.
+      - name: Ensure the registry exists
+        if: inputs.image_tag == ''
+        shell: bash
+        working-directory: infra/envs/dev
+        run: |
+          terraform init -input=false -backend-config="bucket=${TF_STATE_BUCKET}"
+          terraform apply -input=false -auto-approve -lock-timeout=120s -no-color \
+            -target=aws_ecr_repository.app -target=aws_ecr_lifecycle_policy.app
+
       - name: Build and push the image
         if: inputs.image_tag == ''
         shell: bash
@@ -182,11 +200,6 @@ jobs:
       # EXTENSION POINT (Module 3): the policy and guardrail gate attaches here, before anything
       # is changed. A failing gate stops the run before apply.
 
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false
-
       - name: Apply
         id: apply
         shell: bash
@@ -232,10 +245,34 @@ jobs:
             echo "The service runs a different version than requested; the deployment was rolled back" >&2
             exit 1
           fi
+          # The task definition has a container health check, so a task that runs but is not healthy
+          # must fail the run. Give a new task time to pass its first checks before judging it.
+          HEALTH_DEADLINE=$((SECONDS + ${HEALTH_WAIT_SECONDS:-120}))
+          while :; do
+            TASKS="$(aws ecs list-tasks --cluster "${CLUSTER}" --service-name "${SERVICE}" \
+              --query 'taskArns' --output text)"
+            read -r -a TASK_ARNS <<< "${TASKS}"
+            HEALTH="$(aws ecs describe-tasks --cluster "${CLUSTER}" --tasks "${TASK_ARNS[@]}" \
+              --query 'tasks[].healthStatus' --output text)"
+            echo "task health: ${HEALTH}"
+            if [[ " ${HEALTH} " == *" UNHEALTHY "* ]]; then
+              echo "A task is unhealthy" >&2
+              exit 1
+            fi
+            if [ -n "${HEALTH}" ] && [[ " ${HEALTH} " != *" UNKNOWN "* ]] && [[ " ${HEALTH} " != *" None "* ]]; then
+              break
+            fi
+            if [ "${SECONDS}" -ge "${HEALTH_DEADLINE}" ]; then
+              echo "The task did not become healthy in time (last: ${HEALTH:-none})" >&2
+              exit 1
+            fi
+            sleep "${HEALTH_POLL_SECONDS:-5}"
+          done
           {
             echo '### Deployed'
             echo "- version: \`${TAG}\`"
             echo "- running tasks: ${RUNNING}"
+            echo "- task health: ${HEALTH}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Recent service events

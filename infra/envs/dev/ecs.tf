@@ -85,6 +85,18 @@ resource "aws_ecs_task_definition" "app" {
           awslogs-stream-prefix = "app"
         }
       }
+
+      # ECS ignores the HEALTHCHECK instruction of a Dockerfile and only uses the one defined here.
+      # Without it, a version that starts but answers with errors counts as running and the
+      # deployment circuit breaker never sees a problem. With it, an unhealthy task is replaced and
+      # a deployment whose tasks never become healthy is rolled back.
+      healthCheck = {
+        command     = ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${var.container_port}/healthz', timeout=2)"]
+        interval    = 15
+        timeout     = 5
+        retries     = 3
+        startPeriod = 10
+      }
     }
   ])
 }

@@ -23,6 +23,8 @@ and reversible, defined as code, and safe in a public repository where logs are 
 | Verification | Through the ECS API: the running image tag must equal the requested one |
 | Scan | Reported on every build; blocks on CRITICAL only when `SCAN_GATE=block`. A missing scan result is reported as **NOT SCANNED** and, with the gate on, stops the run: no result is not the same as no findings |
 | Image format | Built with `--provenance=false --sbom=false`, so the tag points at a single image the registry can scan |
+| Health | The task definition carries its own container health check (ECS ignores the Dockerfile one), and the verify step fails the run if a task is not healthy |
+| Starting from nothing | The registry is applied first, with `-target`, so the image can be pushed before the rest of the environment exists |
 
 ## Why verification goes through the ECS API
 
@@ -45,6 +47,21 @@ had published an image index with an attestation manifest, which the registry's 
 analyse, and the step had been written to pass when the scan did not complete. Both were fixed: the image
 is built without the extra manifest, and a missing scan is now reported as not scanned and, with the gate
 on, stops the run. A check that passes silently when it cannot run is worse than no check.
+
+## What the rollback covers
+
+The deployment circuit breaker rolls back a version whose tasks cannot start or do not stay up. Before the
+container health check existed, a version that started but answered with errors counted as running, and
+neither the breaker nor the verify step would have noticed. With the health check, a task that stays
+unhealthy is replaced and the deployment fails. A fault that the health endpoint does not exercise is still
+not caught: the endpoint only proves the process answers.
+
+## The cost of `-target`
+
+Applying only the registry first is a bootstrap step, not a way of working. `-target` skips the dependency
+graph, so it is limited to two resources that depend on nothing else, and the full apply that follows still
+manages everything. The cleaner design is a separate stack for the registry, which would make the order
+explicit without `-target`. That is a reasonable next step if the environment grows.
 
 ## Consequences
 
