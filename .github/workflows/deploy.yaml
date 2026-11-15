@@ -157,7 +157,10 @@ jobs:
           # Poll for it instead of using the CLI waiter, which treats "not found" as a failure and
           # reported a scan as missing when it completed nine seconds later.
           flatten() { tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-200; }
-          WAIT="${SCAN_WAIT_SECONDS:-150}"
+          # Measured: a scan takes 8 to 12 seconds on an existing registry, but the first scan of a
+          # registry created minutes earlier took about 155 seconds. The loop leaves as soon as the
+          # scan completes, so a larger limit costs nothing on a normal run.
+          WAIT="${SCAN_WAIT_SECONDS:-300}"
           DEADLINE=$((SECONDS + WAIT))
           STATUS=""
           COUNTS=""

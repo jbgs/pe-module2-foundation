@@ -48,6 +48,15 @@ analyse, and the step had been written to pass when the scan did not complete. B
 is built without the extra manifest, and a missing scan is now reported as not scanned and, with the gate
 on, stops the run. A check that passes silently when it cannot run is worse than no check.
 
+## How long the scan takes
+
+The wait for the scan result is a limit, not a delay: the step leaves as soon as the scan completes. It is
+set to 300 seconds because of what was measured. On an existing registry the scan completed 8 to 12 seconds
+after the push (three runs). On a registry created minutes earlier it took about 155 seconds, and a 150
+second limit gave up two seconds too early and reported a scan that then completed. That is one observation
+of the slow case, so the limit is a margin and not a guarantee. Without `SCAN_GATE=block` a missed scan only
+produces a warning; with it, a missed scan stops the run, so the limit matters most once the gate is on.
+
 ## What the rollback covers
 
 The deployment circuit breaker rolls back a version whose tasks cannot start or do not stay up. Before the
