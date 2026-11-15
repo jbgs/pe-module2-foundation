@@ -18,6 +18,17 @@ output "log_group_name" {
   value       = aws_cloudwatch_log_group.app.name
 }
 
+# The pipeline reads these two to plan and deploy against what is live, not against defaults.
+output "image_tag" {
+  description = "Image tag the service is set to run."
+  value       = var.image_tag
+}
+
+output "desired_count" {
+  description = "Number of tasks the service is set to run."
+  value       = var.desired_count
+}
+
 output "vpc_id" {
   description = "Lab VPC."
   value       = aws_vpc.main.id

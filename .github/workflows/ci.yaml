@@ -1,0 +1,142 @@
+name: CI
+
+# Runs on every pull request. Nothing here changes infrastructure: the plan job uses the read-only
+# role, and pull requests from forks get no credentials at all.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TERRAFORM_VERSION: "1.14.5"
+  AWS_REGION: us-east-1
+
+jobs:
+  app:
+    name: App tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Unit tests
+        working-directory: app
+        run: python3 -m unittest -v
+
+  image:
+    name: Image builds and runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: docker build --build-arg APP_VERSION="ci-${GITHUB_SHA}" -t pe-lab-app:ci app
+
+      - name: Runs as an unprivileged user
+        run: test "$(docker inspect --format '{{.Config.User}}' pe-lab-app:ci)" = "10001"
+
+      - name: Starts, is healthy and reports its version
+        run: |
+          docker run -d --name app -p 8080:8080 pe-lab-app:ci
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/ | grep -q "ci-${GITHUB_SHA}"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs app || true
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f app || true
+
+  terraform-static:
+    name: Terraform ${{ matrix.stack }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [infra/bootstrap, infra/oidc, infra/envs/dev]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive
+        working-directory: ${{ matrix.stack }}
+
+      - name: Validate
+        working-directory: ${{ matrix.stack }}
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+  terraform-plan:
+    name: Terraform plan (dev)
+    # Pull requests from forks get no secrets and no OIDC token, so the plan only runs for branches
+    # of this repository.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Read-only role: it can plan but never change anything.
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-plan
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Plan against what is deployed
+        shell: bash
+        working-directory: infra/envs/dev
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_VAR_allowed_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          TF_VAR_allowed_ingress_cidrs: '["${{ secrets.ALLOWED_INGRESS_CIDR }}"]'
+        run: |
+          terraform init -input=false -backend-config="bucket=${TF_STATE_BUCKET}"
+          # Plan with the version and size that are deployed now, so the plan shows only what this
+          # pull request changes and not the difference between a default and the live value.
+          IMAGE_TAG="$(terraform output -json | jq -r '.image_tag.value // "bootstrap"')"
+          DESIRED="$(terraform output -json | jq -r '.desired_count.value // 0')"
+          terraform plan -input=false -lock-timeout=60s -no-color \
+            -var "image_tag=${IMAGE_TAG}" -var "desired_count=${DESIRED}" | tee plan.txt
+          {
+            echo '### Terraform plan (dev)'
+            echo '```'
+            grep -E '^Plan:|^No changes|will be (created|updated in-place|destroyed|replaced)' plan.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

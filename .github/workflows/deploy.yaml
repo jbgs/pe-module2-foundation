@@ -1,0 +1,202 @@
+name: Deploy
+
+# Builds the image for a commit, applies the dev environment with it, and checks that the version
+# that is running is the version that was asked for.
+#
+# The pipeline never turns the service on by itself. A merge keeps the current size (0 or 1 task);
+# switching the service on or off is a manual run, so a code change cannot create cost or stop
+# the service by accident.
+#
+# Rolling back is deploying an older, existing image tag with a manual run. A new version that
+# cannot start is also rolled back automatically by the ECS deployment circuit breaker, and this
+# workflow fails in that case instead of reporting success.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "infra/envs/dev/**"
+      - ".github/workflows/deploy.yaml"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing image tag to deploy (rollback). Leave empty to build this commit."
+        required: false
+        default: ""
+      desired_count:
+        description: "Number of tasks to run"
+        type: choice
+        options: ["0", "1"]
+        default: "1"
+
+permissions:
+  contents: read
+
+# One deploy at a time. A queued deploy waits instead of cancelling one that is half applied.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.14.5"
+  AWS_REGION: us-east-1
+  CLUSTER: pe-lab-dev
+  SERVICE: pe-lab-app
+  REPOSITORY: pe-lab-app
+
+jobs:
+  deploy:
+    name: Build, apply and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_IN_AUTOMATION: "true"
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+      TF_VAR_allowed_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+      TF_VAR_allowed_ingress_cidrs: '["${{ secrets.ALLOWED_INGRESS_CIDR }}"]'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Decide the image tag
+        id: tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          TAG="${INPUT_TAG:-${GITHUB_SHA}}"
+          if ! [[ "$TAG" =~ ^[A-Za-z0-9_.-]{1,128}$ ]]; then
+            echo "Invalid image tag" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      # Apply role: only runs on the main branch of this repository can assume it.
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-apply
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and push the image
+        if: inputs.image_tag == ''
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${REGISTRY}"
+          # Tags are immutable, so a re-run of the same commit must not try to overwrite the image.
+          if aws ecr describe-images --repository-name "${REPOSITORY}" --image-ids imageTag="${TAG}" > /dev/null 2>&1; then
+            echo "Image ${TAG} already exists, skipping the build"
+          else
+            docker build --build-arg APP_VERSION="${TAG}" -t "${REGISTRY}/${REPOSITORY}:${TAG}" app
+            docker push "${REGISTRY}/${REPOSITORY}:${TAG}"
+          fi
+
+      - name: Rollback target exists
+        if: inputs.image_tag != ''
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          aws ecr describe-images --repository-name "${REPOSITORY}" --image-ids imageTag="${TAG}" > /dev/null
+
+      - name: Image scan result
+        if: inputs.image_tag == ''
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          SCAN_GATE: ${{ vars.SCAN_GATE }}
+        run: |
+          aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" --image-id imageTag="${TAG}" || {
+            echo "Scan did not complete in time"
+            exit 0
+          }
+          COUNTS="$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" \
+            --image-id imageTag="${TAG}" --query 'imageScanFindings.findingSeverityCounts' --output json)"
+          {
+            echo '### Image scan'
+            echo '```json'
+            echo "${COUNTS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          CRITICAL="$(echo "${COUNTS}" | jq -r '.CRITICAL // 0')"
+          # Report-only by default. Set the repository variable SCAN_GATE=block to stop on CRITICAL.
+          if [ "${SCAN_GATE:-}" = "block" ] && [ "${CRITICAL}" -gt 0 ]; then
+            echo "CRITICAL findings and SCAN_GATE=block: stopping before apply" >&2
+            exit 1
+          fi
+
+      # EXTENSION POINT (Module 3): the policy and guardrail gate attaches here, before anything
+      # is changed. A failing gate stops the run before apply.
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Apply
+        id: apply
+        shell: bash
+        working-directory: infra/envs/dev
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          INPUT_DESIRED: ${{ inputs.desired_count }}
+        run: |
+          terraform init -input=false -backend-config="bucket=${TF_STATE_BUCKET}"
+          if [ -n "${INPUT_DESIRED}" ]; then
+            DESIRED="${INPUT_DESIRED}"
+          else
+            # A merge keeps the size that is deployed now.
+            DESIRED="$(terraform output -json | jq -r '.desired_count.value // 0')"
+          fi
+          terraform apply -input=false -auto-approve -lock-timeout=120s -no-color \
+            -var "image_tag=${TAG}" -var "desired_count=${DESIRED}"
+          echo "desired=${DESIRED}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the requested version is the one running
+        if: steps.apply.outputs.desired != '0'
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # The service is reachable only from an allowed address, which a runner is not, so the
+          # check is made through the ECS API: wait for the deployment to settle, then compare.
+          aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
+          TASK_DEF="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].taskDefinition' --output text)"
+          IMAGE="$(aws ecs describe-task-definition --task-definition "${TASK_DEF}" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text)"
+          RUNNING="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].runningCount' --output text)"
+          echo "running=${RUNNING} image=${IMAGE}"
+          if [ "${RUNNING}" -lt 1 ]; then
+            echo "No task is running" >&2
+            exit 1
+          fi
+          # If the circuit breaker rolled the deployment back, the service is stable but runs the
+          # previous version. That is a failed deploy and must not look like a success.
+          if [[ "${IMAGE}" != *":${TAG}" ]]; then
+            echo "The service runs a different version than requested; the deployment was rolled back" >&2
+            exit 1
+          fi
+          {
+            echo '### Deployed'
+            echo "- version: \`${TAG}\`"
+            echo "- running tasks: ${RUNNING}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Recent service events
+        if: failure()
+        shell: bash
+        run: |
+          aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" \
+            --query 'services[0].events[0:6].message' --output text || true
+
+      # EXTENSION POINT (Module 3/4): the audit record attaches here, after the outcome is known:
+      # who or what changed what, which version, and which approval it ran under.
