@@ -40,7 +40,8 @@ jobs:
           persist-credentials: false
 
       - name: Build
-        run: docker build --build-arg APP_VERSION="ci-${GITHUB_SHA}" -t pe-lab-app:ci app
+        # Same flags as the deploy build, so a pull request proves they work before a merge relies on them.
+        run: docker build --provenance=false --sbom=false --build-arg APP_VERSION="ci-${GITHUB_SHA}" -t pe-lab-app:ci app
 
       - name: Runs as an unprivileged user
         run: test "$(docker inspect --format '{{.Config.User}}' pe-lab-app:ci)" = "10001"
