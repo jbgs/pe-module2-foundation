@@ -51,11 +51,27 @@ on, stops the run. A check that passes silently when it cannot run is worse than
 ## How long the scan takes
 
 The wait for the scan result is a limit, not a delay: the step leaves as soon as the scan completes. It is
-set to 300 seconds because of what was measured. On an existing registry the scan completed 8 to 12 seconds
-after the push (three runs). On a registry created minutes earlier it took about 155 seconds, and a 150
-second limit gave up two seconds too early and reported a scan that then completed. That is one observation
-of the slow case, so the limit is a margin and not a guarantee. Without `SCAN_GATE=block` a missed scan only
-produces a warning; with it, a missed scan stops the run, so the limit matters most once the gate is on.
+set to 300 seconds because the time the scan takes was measured and found to vary a lot. Five scans were
+timed, from the push of the image to the registry reporting the scan complete:
+
+| Scan | Registry | Push to complete |
+|---|---|---|
+| 1 | existing | 9 s |
+| 2 | existing | 8 s |
+| 3 | existing | about 9 s (the push time is approximate) |
+| 4 | existing | 41 s |
+| 5 | created minutes earlier, after destroying and recreating the environment | about 155 s |
+
+The range is 8 to 155 seconds. The slowest scan was the one on a new registry, which first suggested that a
+new registry is slow. The fourth scan weakens that: an existing registry also took 41 seconds. **The cause of
+the variation is not established**, and it may be the load on the scanning service rather than anything this
+repository does. With five observations the limit is a margin chosen to cover the worst case seen, not a
+guarantee, and a first limit of 150 seconds gave up two seconds before the slowest scan completed.
+
+Without `SCAN_GATE=block` a missed scan only produces a warning; with it, a missed scan stops the run, so
+the limit matters most once the gate is on. If a scan ever takes longer than 300 seconds, the step reports
+it as not scanned and, with the gate on, fails closed; that is the safe outcome, at the price of a failed
+deploy that can be run again.
 
 ## What the rollback covers
 
