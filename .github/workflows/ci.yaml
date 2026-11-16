@@ -92,6 +92,50 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+  ai-review:
+    name: AI review (advisory)
+    # Advisory only: the job comments on the pull request and nothing else. It has no cloud credentials,
+    # cannot approve or block a merge, and a person decides. Pull requests from forks get no secrets, so
+    # there is nothing to review them with.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The SDK is installed from a file of exact versions with hashes, and nothing else is resolved.
+      - name: Install the pinned SDK
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --disable-pip-version-check --no-deps --require-hashes \
+            -r .github/scripts/requirements.txt
+
+      - name: Tests of the review script
+        run: "${RUNNER_TEMP}/venv/bin/python -m unittest discover -s .github/scripts -v"
+
+      - name: Review the pull request
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: "${RUNNER_TEMP}/venv/bin/python .github/scripts/ai_review.py"
+
+      # What happened, with hashes in place of content: the seed of the audit record of Module 4.
+      - name: Keep the trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ai-trace
+          path: ai-trace.json
+          retention-days: 90
+          if-no-files-found: warn
+
   terraform-plan:
     name: Terraform plan (dev)
     # Pull requests from forks get no secrets and no OIDC token, so the plan only runs for branches
