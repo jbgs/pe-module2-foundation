@@ -17,6 +17,7 @@ import signal
 import socketserver
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SERVICE_NAME = "pe-module2-foundation"
@@ -79,6 +80,10 @@ def main():
     host = os.environ.get("HOST", "0.0.0.0")  # noqa: S104 - bind inside the container
     port = int(os.environ.get("PORT", "8080"))
     version = os.environ.get("APP_VERSION", "dev")
+
+    # Record when this process started, for whoever reads the logs later.
+    with open("/tmp/started-at", "w", encoding="utf-8") as fh:
+        fh.write(str(time.time()))
 
     server = make_server(host, port, version)
 
