@@ -1,0 +1,622 @@
+inicio: 2026-11-15T21:56:49Z
+data.aws_iam_policy_document.task_execution_trust: Reading...
+data.aws_availability_zones.available: Reading...
+data.aws_caller_identity.current: Reading...
+aws_cloudwatch_log_group.app: Refreshing state... [id=/pe-lab/app]
+aws_vpc.main: Refreshing state... [id=vpc-0446e01b6e7e44bc4]
+aws_ecr_repository.app: Refreshing state... [id=pe-lab-app]
+aws_ecs_cluster.main: Refreshing state... [id=arn:aws:ecs:us-east-1:<conta>:cluster/pe-lab-dev]
+data.aws_iam_policy_document.task_execution_trust: Read complete after 0s [id=1077804475]
+data.aws_caller_identity.current: Read complete after 0s [id=<conta>]
+aws_iam_role.task_execution: Refreshing state... [id=pe-lab-task-execution]
+data.aws_availability_zones.available: Read complete after 1s [id=us-east-1]
+aws_ecr_lifecycle_policy.app: Refreshing state... [id=pe-lab-app]
+aws_iam_role_policy_attachment.task_execution: Refreshing state... [id=pe-lab-task-execution/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy]
+aws_ecs_task_definition.app: Refreshing state... [id=pe-lab-app]
+aws_internet_gateway.main: Refreshing state... [id=igw-00de94a12eb31abc8]
+aws_default_security_group.default: Refreshing state... [id=sg-0d026c4f2181a0bae]
+aws_subnet.public[1]: Refreshing state... [id=subnet-00dd0f36c7e302d78]
+aws_subnet.public[0]: Refreshing state... [id=subnet-0b88d916da0345350]
+aws_security_group.app: Refreshing state... [id=sg-05e4812c58b8af32c]
+aws_route_table.public: Refreshing state... [id=rtb-053432d4ce84c361d]
+aws_vpc_security_group_egress_rule.app: Refreshing state... [id=sgr-040f469aca4e7e22f]
+aws_vpc_security_group_ingress_rule.app["<seu-ip>/32"]: Refreshing state... [id=sgr-01e7a696a321b93ec]
+aws_ecs_service.app: Refreshing state... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app]
+aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-0bdf22393301f48a7]
+aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-0eda9cc0e3dda9df5]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  - destroy
+
+Terraform will perform the following actions:
+
+  # aws_cloudwatch_log_group.app will be destroyed
+  - resource "aws_cloudwatch_log_group" "app" {
+      - arn                         = "arn:aws:logs:us-east-1:<conta>:log-group:/pe-lab/app" -> null
+      - deletion_protection_enabled = false -> null
+      - id                          = "/pe-lab/app" -> null
+      - log_group_class             = "STANDARD" -> null
+      - name                        = "/pe-lab/app" -> null
+      - region                      = "us-east-1" -> null
+      - retention_in_days           = 7 -> null
+      - skip_destroy                = false -> null
+      - tags                        = {} -> null
+      - tags_all                    = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+        # (2 unchanged attributes hidden)
+    }
+
+  # aws_default_security_group.default will be destroyed
+  - resource "aws_default_security_group" "default" {
+      - arn                    = "arn:aws:ec2:us-east-1:<conta>:security-group/sg-0d026c4f2181a0bae" -> null
+      - description            = "default VPC security group" -> null
+      - egress                 = [] -> null
+      - id                     = "sg-0d026c4f2181a0bae" -> null
+      - ingress                = [] -> null
+      - name                   = "default" -> null
+      - owner_id               = "<conta>" -> null
+      - region                 = "us-east-1" -> null
+      - revoke_rules_on_delete = false -> null
+      - tags                   = {} -> null
+      - tags_all               = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id                 = "vpc-0446e01b6e7e44bc4" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_ecr_lifecycle_policy.app will be destroyed
+  - resource "aws_ecr_lifecycle_policy" "app" {
+      - id          = "pe-lab-app" -> null
+      - policy      = jsonencode(
+            {
+              - rules = [
+                  - {
+                      - action       = {
+                          - type = "expire"
+                        }
+                      - description  = "Keep the most recent images only"
+                      - rulePriority = 1
+                      - selection    = {
+                          - countNumber = 10
+                          - countType   = "imageCountMoreThan"
+                          - tagStatus   = "any"
+                        }
+                    },
+                ]
+            }
+        ) -> null
+      - region      = "us-east-1" -> null
+      - registry_id = "<conta>" -> null
+      - repository  = "pe-lab-app" -> null
+    }
+
+  # aws_ecr_repository.app will be destroyed
+  - resource "aws_ecr_repository" "app" {
+      - arn                  = "arn:aws:ecr:us-east-1:<conta>:repository/pe-lab-app" -> null
+      - force_delete         = true -> null
+      - id                   = "pe-lab-app" -> null
+      - image_tag_mutability = "IMMUTABLE" -> null
+      - name                 = "pe-lab-app" -> null
+      - region               = "us-east-1" -> null
+      - registry_id          = "<conta>" -> null
+      - repository_url       = "<conta>.dkr.ecr.us-east-1.amazonaws.com/pe-lab-app" -> null
+      - tags                 = {} -> null
+      - tags_all             = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+
+      - encryption_configuration {
+          - encryption_type = "AES256" -> null
+            # (1 unchanged attribute hidden)
+        }
+
+      - image_scanning_configuration {
+          - scan_on_push = true -> null
+        }
+    }
+
+  # aws_ecs_cluster.main will be destroyed
+  - resource "aws_ecs_cluster" "main" {
+      - arn      = "arn:aws:ecs:us-east-1:<conta>:cluster/pe-lab-dev" -> null
+      - id       = "arn:aws:ecs:us-east-1:<conta>:cluster/pe-lab-dev" -> null
+      - name     = "pe-lab-dev" -> null
+      - region   = "us-east-1" -> null
+      - tags     = {} -> null
+      - tags_all = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+
+      - setting {
+          - name  = "containerInsights" -> null
+          - value = "disabled" -> null
+        }
+    }
+
+  # aws_ecs_service.app will be destroyed
+  - resource "aws_ecs_service" "app" {
+      - arn                                = "arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app" -> null
+      - availability_zone_rebalancing      = "ENABLED" -> null
+      - cluster                            = "arn:aws:ecs:us-east-1:<conta>:cluster/pe-lab-dev" -> null
+      - deployment_maximum_percent         = 200 -> null
+      - deployment_minimum_healthy_percent = 100 -> null
+      - desired_count                      = 1 -> null
+      - enable_ecs_managed_tags            = false -> null
+      - enable_execute_command             = false -> null
+      - health_check_grace_period_seconds  = 0 -> null
+      - iam_role                           = "/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS" -> null
+      - id                                 = "arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app" -> null
+      - launch_type                        = "FARGATE" -> null
+      - name                               = "pe-lab-app" -> null
+      - platform_version                   = "LATEST" -> null
+      - propagate_tags                     = "NONE" -> null
+      - region                             = "us-east-1" -> null
+      - scheduling_strategy                = "REPLICA" -> null
+      - tags                               = {} -> null
+      - tags_all                           = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - task_definition                    = "arn:aws:ecs:us-east-1:<conta>:task-definition/pe-lab-app:8" -> null
+      - triggers                           = {} -> null
+      - wait_for_steady_state              = false -> null
+
+      - deployment_circuit_breaker {
+          - enable   = true -> null
+          - rollback = true -> null
+        }
+
+      - deployment_configuration {
+          - bake_time_in_minutes = "0" -> null
+          - strategy             = "ROLLING" -> null
+        }
+
+      - deployment_controller {
+          - type = "ECS" -> null
+        }
+
+      - network_configuration {
+          - assign_public_ip = true -> null
+          - security_groups  = [
+              - "sg-05e4812c58b8af32c",
+            ] -> null
+          - subnets          = [
+              - "subnet-00dd0f36c7e302d78",
+              - "subnet-0b88d916da0345350",
+            ] -> null
+        }
+    }
+
+  # aws_ecs_task_definition.app will be destroyed
+  - resource "aws_ecs_task_definition" "app" {
+      - arn                      = "arn:aws:ecs:us-east-1:<conta>:task-definition/pe-lab-app:8" -> null
+      - arn_without_revision     = "arn:aws:ecs:us-east-1:<conta>:task-definition/pe-lab-app" -> null
+      - container_definitions    = jsonencode(
+            [
+              - {
+                  - environment            = []
+                  - essential              = true
+                  - healthCheck            = {
+                      - command     = [
+                          - "CMD",
+                          - "python",
+                          - "-c",
+                          - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)",
+                        ]
+                      - interval    = 15
+                      - retries     = 3
+                      - startPeriod = 10
+                      - timeout     = 5
+                    }
+                  - image                  = "<conta>.dkr.ecr.us-east-1.amazonaws.com/pe-lab-app:cf159b5864ad55901989c60b7a35a16102666b34"
+                  - logConfiguration       = {
+                      - logDriver = "awslogs"
+                      - options   = {
+                          - awslogs-group         = "/pe-lab/app"
+                          - awslogs-region        = "us-east-1"
+                          - awslogs-stream-prefix = "app"
+                        }
+                    }
+                  - mountPoints            = []
+                  - name                   = "app"
+                  - portMappings           = [
+                      - {
+                          - containerPort = 8080
+                          - hostPort      = 8080
+                          - protocol      = "tcp"
+                        },
+                    ]
+                  - readonlyRootFilesystem = true
+                  - systemControls         = []
+                  - volumesFrom            = []
+                },
+            ]
+        ) -> null
+      - cpu                      = "256" -> null
+      - enable_fault_injection   = false -> null
+      - execution_role_arn       = "arn:aws:iam::<conta>:role/pe-lab-task-execution" -> null
+      - family                   = "pe-lab-app" -> null
+      - id                       = "pe-lab-app" -> null
+      - memory                   = "512" -> null
+      - network_mode             = "awsvpc" -> null
+      - region                   = "us-east-1" -> null
+      - requires_compatibilities = [
+          - "FARGATE",
+        ] -> null
+      - revision                 = 8 -> null
+      - skip_destroy             = false -> null
+      - tags                     = {} -> null
+      - tags_all                 = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - track_latest             = false -> null
+        # (3 unchanged attributes hidden)
+
+      - runtime_platform {
+          - cpu_architecture        = "X86_64" -> null
+          - operating_system_family = "LINUX" -> null
+        }
+    }
+
+  # aws_iam_role.task_execution will be destroyed
+  - resource "aws_iam_role" "task_execution" {
+      - arn                   = "arn:aws:iam::<conta>:role/pe-lab-task-execution" -> null
+      - assume_role_policy    = jsonencode(
+            {
+              - Statement = [
+                  - {
+                      - Action    = "sts:AssumeRole"
+                      - Effect    = "Allow"
+                      - Principal = {
+                          - Service = "ecs-tasks.amazonaws.com"
+                        }
+                    },
+                ]
+              - Version   = "2012-10-17"
+            }
+        ) -> null
+      - create_date           = "2026-11-15T21:37:25Z" -> null
+      - force_detach_policies = false -> null
+      - id                    = "pe-lab-task-execution" -> null
+      - managed_policy_arns   = [
+          - "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+        ] -> null
+      - max_session_duration  = 3600 -> null
+      - name                  = "pe-lab-task-execution" -> null
+      - path                  = "/" -> null
+      - permissions_boundary  = "arn:aws:iam::<conta>:policy/pe-lab-boundary" -> null
+      - tags                  = {} -> null
+      - tags_all              = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - unique_id             = "AROATBJDP5I66JUUMXZAQ" -> null
+        # (2 unchanged attributes hidden)
+    }
+
+  # aws_iam_role_policy_attachment.task_execution will be destroyed
+  - resource "aws_iam_role_policy_attachment" "task_execution" {
+      - id         = "pe-lab-task-execution/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" -> null
+      - policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" -> null
+      - role       = "pe-lab-task-execution" -> null
+    }
+
+  # aws_internet_gateway.main will be destroyed
+  - resource "aws_internet_gateway" "main" {
+      - arn      = "arn:aws:ec2:us-east-1:<conta>:internet-gateway/igw-00de94a12eb31abc8" -> null
+      - id       = "igw-00de94a12eb31abc8" -> null
+      - owner_id = "<conta>" -> null
+      - region   = "us-east-1" -> null
+      - tags     = {
+          - "Name" = "pe-lab-dev"
+        } -> null
+      - tags_all = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-dev"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id   = "vpc-0446e01b6e7e44bc4" -> null
+    }
+
+  # aws_route_table.public will be destroyed
+  - resource "aws_route_table" "public" {
+      - arn              = "arn:aws:ec2:us-east-1:<conta>:route-table/rtb-053432d4ce84c361d" -> null
+      - id               = "rtb-053432d4ce84c361d" -> null
+      - owner_id         = "<conta>" -> null
+      - propagating_vgws = [] -> null
+      - region           = "us-east-1" -> null
+      - route            = [
+          - {
+              - cidr_block                 = "0.0.0.0/0"
+              - gateway_id                 = "igw-00de94a12eb31abc8"
+                # (12 unchanged attributes hidden)
+            },
+        ] -> null
+      - tags             = {
+          - "Name" = "pe-lab-dev-public"
+        } -> null
+      - tags_all         = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-dev-public"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id           = "vpc-0446e01b6e7e44bc4" -> null
+    }
+
+  # aws_route_table_association.public[0] will be destroyed
+  - resource "aws_route_table_association" "public" {
+      - id             = "rtbassoc-0eda9cc0e3dda9df5" -> null
+      - region         = "us-east-1" -> null
+      - route_table_id = "rtb-053432d4ce84c361d" -> null
+      - subnet_id      = "subnet-0b88d916da0345350" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_route_table_association.public[1] will be destroyed
+  - resource "aws_route_table_association" "public" {
+      - id             = "rtbassoc-0bdf22393301f48a7" -> null
+      - region         = "us-east-1" -> null
+      - route_table_id = "rtb-053432d4ce84c361d" -> null
+      - subnet_id      = "subnet-00dd0f36c7e302d78" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_security_group.app will be destroyed
+  - resource "aws_security_group" "app" {
+      - arn                    = "arn:aws:ec2:us-east-1:<conta>:security-group/sg-05e4812c58b8af32c" -> null
+      - description            = "Service port from the allowed sources only" -> null
+      - egress                 = [
+          - {
+              - cidr_blocks      = [
+                  - "0.0.0.0/0",
+                ]
+              - description      = "Registry, logs and updates"
+              - from_port        = 0
+              - ipv6_cidr_blocks = []
+              - prefix_list_ids  = []
+              - protocol         = "-1"
+              - security_groups  = []
+              - self             = false
+              - to_port          = 0
+            },
+        ] -> null
+      - id                     = "sg-05e4812c58b8af32c" -> null
+      - ingress                = [
+          - {
+              - cidr_blocks      = [
+                  - "<seu-ip>/32",
+                ]
+              - description      = "Service port from an allowed source"
+              - from_port        = 8080
+              - ipv6_cidr_blocks = []
+              - prefix_list_ids  = []
+              - protocol         = "tcp"
+              - security_groups  = []
+              - self             = false
+              - to_port          = 8080
+            },
+        ] -> null
+      - name                   = "pe-lab-app" -> null
+      - owner_id               = "<conta>" -> null
+      - region                 = "us-east-1" -> null
+      - revoke_rules_on_delete = false -> null
+      - tags                   = {
+          - "Name" = "pe-lab-app"
+        } -> null
+      - tags_all               = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-app"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id                 = "vpc-0446e01b6e7e44bc4" -> null
+        # (1 unchanged attribute hidden)
+    }
+
+  # aws_subnet.public[0] will be destroyed
+  - resource "aws_subnet" "public" {
+      - arn                                            = "arn:aws:ec2:us-east-1:<conta>:subnet/subnet-0b88d916da0345350" -> null
+      - assign_ipv6_address_on_creation                = false -> null
+      - availability_zone                              = "us-east-1a" -> null
+      - availability_zone_id                           = "use1-az1" -> null
+      - cidr_block                                     = "10.20.0.0/24" -> null
+      - enable_dns64                                   = false -> null
+      - enable_lni_at_device_index                     = 0 -> null
+      - enable_resource_name_dns_a_record_on_launch    = false -> null
+      - enable_resource_name_dns_aaaa_record_on_launch = false -> null
+      - id                                             = "subnet-0b88d916da0345350" -> null
+      - ipv6_native                                    = false -> null
+      - map_customer_owned_ip_on_launch                = false -> null
+      - map_public_ip_on_launch                        = false -> null
+      - owner_id                                       = "<conta>" -> null
+      - private_dns_hostname_type_on_launch            = "ip-name" -> null
+      - region                                         = "us-east-1" -> null
+      - tags                                           = {
+          - "Name" = "pe-lab-dev-public-us-east-1a"
+        } -> null
+      - tags_all                                       = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-dev-public-us-east-1a"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id                                         = "vpc-0446e01b6e7e44bc4" -> null
+        # (4 unchanged attributes hidden)
+    }
+
+  # aws_subnet.public[1] will be destroyed
+  - resource "aws_subnet" "public" {
+      - arn                                            = "arn:aws:ec2:us-east-1:<conta>:subnet/subnet-00dd0f36c7e302d78" -> null
+      - assign_ipv6_address_on_creation                = false -> null
+      - availability_zone                              = "us-east-1b" -> null
+      - availability_zone_id                           = "use1-az2" -> null
+      - cidr_block                                     = "10.20.1.0/24" -> null
+      - enable_dns64                                   = false -> null
+      - enable_lni_at_device_index                     = 0 -> null
+      - enable_resource_name_dns_a_record_on_launch    = false -> null
+      - enable_resource_name_dns_aaaa_record_on_launch = false -> null
+      - id                                             = "subnet-00dd0f36c7e302d78" -> null
+      - ipv6_native                                    = false -> null
+      - map_customer_owned_ip_on_launch                = false -> null
+      - map_public_ip_on_launch                        = false -> null
+      - owner_id                                       = "<conta>" -> null
+      - private_dns_hostname_type_on_launch            = "ip-name" -> null
+      - region                                         = "us-east-1" -> null
+      - tags                                           = {
+          - "Name" = "pe-lab-dev-public-us-east-1b"
+        } -> null
+      - tags_all                                       = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-dev-public-us-east-1b"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - vpc_id                                         = "vpc-0446e01b6e7e44bc4" -> null
+        # (4 unchanged attributes hidden)
+    }
+
+  # aws_vpc.main will be destroyed
+  - resource "aws_vpc" "main" {
+      - arn                                  = "arn:aws:ec2:us-east-1:<conta>:vpc/vpc-0446e01b6e7e44bc4" -> null
+      - assign_generated_ipv6_cidr_block     = false -> null
+      - cidr_block                           = "10.20.0.0/16" -> null
+      - default_network_acl_id               = "acl-0523a4ba8c55a2ddd" -> null
+      - default_route_table_id               = "rtb-0fe1c5bf548860c42" -> null
+      - default_security_group_id            = "sg-0d026c4f2181a0bae" -> null
+      - dhcp_options_id                      = "dopt-f649498c" -> null
+      - enable_dns_hostnames                 = true -> null
+      - enable_dns_support                   = true -> null
+      - enable_network_address_usage_metrics = false -> null
+      - id                                   = "vpc-0446e01b6e7e44bc4" -> null
+      - instance_tenancy                     = "default" -> null
+      - ipv6_netmask_length                  = 0 -> null
+      - main_route_table_id                  = "rtb-0fe1c5bf548860c42" -> null
+      - owner_id                             = "<conta>" -> null
+      - region                               = "us-east-1" -> null
+      - tags                                 = {
+          - "Name" = "pe-lab-dev"
+        } -> null
+      - tags_all                             = {
+          - "ManagedBy" = "terraform"
+          - "Name"      = "pe-lab-dev"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+        # (4 unchanged attributes hidden)
+    }
+
+  # aws_vpc_security_group_egress_rule.app will be destroyed
+  - resource "aws_vpc_security_group_egress_rule" "app" {
+      - arn                    = "arn:aws:ec2:us-east-1:<conta>:security-group-rule/sgr-040f469aca4e7e22f" -> null
+      - cidr_ipv4              = "0.0.0.0/0" -> null
+      - description            = "Registry, logs and updates" -> null
+      - id                     = "sgr-040f469aca4e7e22f" -> null
+      - ip_protocol            = "-1" -> null
+      - region                 = "us-east-1" -> null
+      - security_group_id      = "sg-05e4812c58b8af32c" -> null
+      - security_group_rule_id = "sgr-040f469aca4e7e22f" -> null
+      - tags_all               = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+    }
+
+  # aws_vpc_security_group_ingress_rule.app["<seu-ip>/32"] will be destroyed
+  - resource "aws_vpc_security_group_ingress_rule" "app" {
+      - arn                    = "arn:aws:ec2:us-east-1:<conta>:security-group-rule/sgr-01e7a696a321b93ec" -> null
+      - cidr_ipv4              = "<seu-ip>/32" -> null
+      - description            = "Service port from an allowed source" -> null
+      - from_port              = 8080 -> null
+      - id                     = "sgr-01e7a696a321b93ec" -> null
+      - ip_protocol            = "tcp" -> null
+      - region                 = "us-east-1" -> null
+      - security_group_id      = "sg-05e4812c58b8af32c" -> null
+      - security_group_rule_id = "sgr-01e7a696a321b93ec" -> null
+      - tags_all               = {
+          - "ManagedBy" = "terraform"
+          - "Project"   = "pe-module2-foundation"
+          - "Stack"     = "dev"
+        } -> null
+      - to_port                = 8080 -> null
+    }
+
+Plan: 0 to add, 0 to change, 19 to destroy.
+
+Changes to Outputs:
+  - cluster_name       = "pe-lab-dev" -> null
+  - desired_count      = 1 -> null
+  - ecr_repository_url = "<conta>.dkr.ecr.us-east-1.amazonaws.com/pe-lab-app" -> null
+  - image_tag          = "cf159b5864ad55901989c60b7a35a16102666b34" -> null
+  - log_group_name     = "/pe-lab/app" -> null
+  - service_name       = "pe-lab-app" -> null
+  - vpc_id             = "vpc-0446e01b6e7e44bc4" -> null
+aws_route_table_association.public[0]: Destroying... [id=rtbassoc-0eda9cc0e3dda9df5]
+aws_route_table_association.public[1]: Destroying... [id=rtbassoc-0bdf22393301f48a7]
+aws_vpc_security_group_ingress_rule.app["<seu-ip>/32"]: Destroying... [id=sgr-01e7a696a321b93ec]
+aws_ecr_lifecycle_policy.app: Destroying... [id=pe-lab-app]
+aws_vpc_security_group_egress_rule.app: Destroying... [id=sgr-040f469aca4e7e22f]
+aws_default_security_group.default: Destroying... [id=sg-0d026c4f2181a0bae]
+aws_ecs_service.app: Destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app]
+aws_default_security_group.default: Destruction complete after 0s
+aws_ecr_lifecycle_policy.app: Destruction complete after 0s
+aws_vpc_security_group_egress_rule.app: Destruction complete after 1s
+aws_vpc_security_group_ingress_rule.app["<seu-ip>/32"]: Destruction complete after 1s
+aws_route_table_association.public[0]: Destruction complete after 1s
+aws_route_table_association.public[1]: Destruction complete after 1s
+aws_route_table.public: Destroying... [id=rtb-053432d4ce84c361d]
+aws_route_table.public: Destruction complete after 1s
+aws_internet_gateway.main: Destroying... [id=igw-00de94a12eb31abc8]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 00m10s elapsed]
+aws_internet_gateway.main: Still destroying... [id=igw-00de94a12eb31abc8, 00m10s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 00m20s elapsed]
+aws_internet_gateway.main: Still destroying... [id=igw-00de94a12eb31abc8, 00m20s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 00m30s elapsed]
+aws_internet_gateway.main: Still destroying... [id=igw-00de94a12eb31abc8, 00m30s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 00m40s elapsed]
+aws_internet_gateway.main: Still destroying... [id=igw-00de94a12eb31abc8, 00m40s elapsed]
+aws_internet_gateway.main: Destruction complete after 41s
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 00m50s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 01m00s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 01m10s elapsed]
+aws_ecs_service.app: Still destroying... [id=arn:aws:ecs:us-east-1:<conta>:service/pe-lab-dev/pe-lab-app, 01m20s elapsed]
+aws_ecs_service.app: Destruction complete after 1m21s
+aws_iam_role_policy_attachment.task_execution: Destroying... [id=pe-lab-task-execution/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy]
+aws_ecs_cluster.main: Destroying... [id=arn:aws:ecs:us-east-1:<conta>:cluster/pe-lab-dev]
+aws_subnet.public[0]: Destroying... [id=subnet-0b88d916da0345350]
+aws_security_group.app: Destroying... [id=sg-05e4812c58b8af32c]
+aws_subnet.public[1]: Destroying... [id=subnet-00dd0f36c7e302d78]
+aws_ecs_task_definition.app: Destroying... [id=pe-lab-app]
+aws_ecs_task_definition.app: Destruction complete after 0s
+aws_cloudwatch_log_group.app: Destroying... [id=/pe-lab/app]
+aws_ecr_repository.app: Destroying... [id=pe-lab-app]
+aws_ecs_cluster.main: Destruction complete after 0s
+aws_iam_role_policy_attachment.task_execution: Destruction complete after 1s
+aws_iam_role.task_execution: Destroying... [id=pe-lab-task-execution]
+aws_security_group.app: Destruction complete after 1s
+aws_cloudwatch_log_group.app: Destruction complete after 1s
+aws_subnet.public[0]: Destruction complete after 1s
+aws_subnet.public[1]: Destruction complete after 1s
+aws_vpc.main: Destroying... [id=vpc-0446e01b6e7e44bc4]
+aws_ecr_repository.app: Destruction complete after 1s
+aws_iam_role.task_execution: Destruction complete after 0s
+aws_vpc.main: Destruction complete after 1s
+
+Destroy complete! Resources: 19 destroyed.
+fim: 2026-11-15T21:58:27Z

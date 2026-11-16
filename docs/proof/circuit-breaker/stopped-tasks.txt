@@ -1,0 +1,5 @@
+08:54:08 -> 09:32:49 | pe-lab-app:9 | stopCode=ServiceSchedulerInitiated | exit=0 | Scaling activity initiated by (deployment ecs-svc/7433634731359600043)
+09:21:38 -> 09:22:32 | pe-lab-app:10 | stopCode=EssentialContainerExited | exit=1 | Essential container in task exited
+09:22:38 -> 09:23:26 | pe-lab-app:10 | stopCode=EssentialContainerExited | exit=1 | Essential container in task exited
+09:23:29 -> 09:24:21 | pe-lab-app:10 | stopCode=EssentialContainerExited | exit=1 | Essential container in task exited
+09:24:29 -> 09:25:14 | pe-lab-app:10 | stopCode=EssentialContainerExited | exit=1 | Essential container in task exited
