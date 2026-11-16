@@ -7,7 +7,7 @@ account identifiers: they are masked before committing.
 |---|---|---|---|
 | 1 | Link to this repository | n/a | done |
 | 2 | Destroy an environment and create it again from code (log or screenshot) | [`destroy-recreate.md`](destroy-recreate.md), [`logs/`](logs/) | done |
-| 3 | One pipeline run from commit to release (screenshot) | [`pipeline-run.md`](pipeline-run.md) | note done, screenshot to add |
+| 3 | One pipeline run from commit to release (screenshot) | [`pipeline-run.md`](pipeline-run.md), [`pipeline-run.png`](pipeline-run.png) | done |
 | 4 | How a rollback is done (screenshot or note) | [`rollback.md`](rollback.md), [`circuit-breaker/`](circuit-breaker/) | done |
 | 5 | Rationale: vendor-neutral tooling and the agentic layer | [`../rationale.md`](../rationale.md) | done |
 

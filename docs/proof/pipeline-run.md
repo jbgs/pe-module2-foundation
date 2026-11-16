@@ -37,5 +37,7 @@ run's job data, not from memory.
 
 ## Screenshot
 
-The hand-in asks for a screenshot of a run. The page for run `43840313493` in the repository's Actions tab shows
-the same steps. The screenshot is added next to this file as `pipeline-run.png`.
+The page of run `43840313493` in the repository's Actions tab, taken after the run: the job `Build, apply and
+verify` succeeded in 3 min 3 s, with the steps above.
+
+![The Deploy run 43840313493, job Build, apply and verify, succeeded in 3m 3s](pipeline-run.png)
