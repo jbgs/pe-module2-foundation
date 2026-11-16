@@ -92,6 +92,27 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+  # The tests of the AI review script. They need no key and no network, run on every push, and are cheap, so
+  # unlike the review itself (workflow "AI review") this check can be required.
+  script-tests:
+    name: AI review script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The SDK is installed from a file of exact versions with hashes, and nothing else is resolved.
+      - name: Install the pinned SDK
+        run: |
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --disable-pip-version-check --no-deps --require-hashes \
+            -r .github/scripts/requirements.txt
+
+      - name: Tests of the review script
+        run: "${RUNNER_TEMP}/venv/bin/python -m unittest discover -s .github/scripts -v"
+
   terraform-plan:
     name: Terraform plan (dev)
     # Pull requests from forks get no secrets and no OIDC token, so the plan only runs for branches
