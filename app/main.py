@@ -80,6 +80,9 @@ def main():
     port = int(os.environ.get("PORT", "8080"))
     version = os.environ.get("APP_VERSION", "dev")
 
+    with open("/tmp/started-at", "w") as fh:
+        fh.write(version)
+
     server = make_server(host, port, version)
 
     # The container platform stops a task with SIGTERM: finish cleanly instead of being killed.
