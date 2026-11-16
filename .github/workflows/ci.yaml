@@ -46,9 +46,11 @@ jobs:
       - name: Runs as an unprivileged user
         run: test "$(docker inspect --format '{{.Config.User}}' pe-lab-app:ci)" = "10001"
 
-      - name: Starts, is healthy and reports its version
+      - name: Starts on a read-only filesystem, is healthy and reports its version
         run: |
-          docker run -d --name app -p 8080:8080 pe-lab-app:ci
+          # --read-only mirrors readonlyRootFilesystem = true in the task definition. A version that writes to
+          # its own filesystem has to fail here, before the merge, and not only on the platform after it.
+          docker run -d --name app --read-only -p 8080:8080 pe-lab-app:ci
           for _ in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:8080/healthz > /dev/null; then break; fi
             sleep 1
