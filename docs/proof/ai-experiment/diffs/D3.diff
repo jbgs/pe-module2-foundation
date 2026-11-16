@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 5cea3a1..5cb8a09 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -77,7 +77,7 @@ def make_server(host, port, version):
+ 
+ def main():
+     host = os.environ.get("HOST", "0.0.0.0")  # noqa: S104 - bind inside the container
+-    port = int(os.environ.get("PORT", "8080"))
++    port = int(os.environ.get("PORT", "8000"))
+     version = os.environ.get("APP_VERSION", "dev")
+ 
+     server = make_server(host, port, version)

@@ -1,0 +1,40 @@
+run 43834845156 | workflow_dispatch | a2b29c3 | completed/success | 2026-11-16T08:52:50Z -> 2026-11-16T08:54:35Z
+   success	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	08:52:56 -> 08:53:00
+   success	Decide the image tag	08:53:00 -> 08:53:00
+   success	Run aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a	08:53:00 -> 08:53:01
+   success	Run hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd	08:53:01 -> 08:53:01
+   success	Ensure the registry exists	08:53:01 -> 08:53:11
+   success	Build and push the image	08:53:11 -> 08:53:25
+   skipped	Rollback target exists	08:53:25 -> 08:53:25
+   success	Image scan result	08:53:25 -> 08:53:37
+   success	Apply	08:53:37 -> 08:53:52
+   success	Verify the requested version is the one running	08:53:52 -> 08:54:32
+   skipped	Recent service events	08:54:32 -> 08:54:32
+run 43838861796 | push | 25b4c2a | completed/failure | 2026-11-16T09:20:32Z -> 2026-11-16T09:25:51Z
+   success	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	09:20:37 -> 09:20:37
+   success	Decide the image tag	09:20:37 -> 09:20:37
+   success	Run aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a	09:20:37 -> 09:20:38
+   success	Run hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd	09:20:38 -> 09:20:39
+   success	Ensure the registry exists	09:20:39 -> 09:20:52
+   success	Build and push the image	09:20:52 -> 09:21:04
+   skipped	Rollback target exists	09:21:04 -> 09:21:04
+   success	Image scan result	09:21:04 -> 09:21:16
+   success	Apply	09:21:16 -> 09:21:26
+   failure	Verify the requested version is the one running	09:21:26 -> 09:25:47
+   success	Recent service events	09:25:47 -> 09:25:48
+run 43840313493 | push | 6622d27 | completed/success | 2026-11-16T09:30:11Z -> 2026-11-16T09:33:17Z
+   success	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	09:30:16 -> 09:30:17
+   success	Decide the image tag	09:30:17 -> 09:30:17
+   success	Run aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a	09:30:17 -> 09:30:17
+   success	Run hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd	09:30:17 -> 09:30:18
+   success	Ensure the registry exists	09:30:18 -> 09:30:30
+   success	Build and push the image	09:30:30 -> 09:30:46
+   skipped	Rollback target exists	09:30:46 -> 09:30:46
+   success	Image scan result	09:30:46 -> 09:30:58
+   success	Apply	09:30:58 -> 09:31:07
+   success	Verify the requested version is the one running	09:31:07 -> 09:33:14
+   skipped	Recent service events	09:33:14 -> 09:33:14
+^[[36;1mecho "running=${RUNNING} image=${IMAGE}"^[[0m
+^[[36;1m  echo "The service runs a different version than requested; the deployment was rolled back" >&2^[[0m
+The service runs a different version than requested; the deployment was rolled back
+running=1 image=***.dkr.ecr.us-east-1.amazonaws.com/pe-lab-app:a2b29c357d43035565decc1b7288e20c90d9d75c

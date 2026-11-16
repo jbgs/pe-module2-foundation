@@ -1,0 +1,14 @@
+{
+  "outcome": "reviewed",
+  "text": "### Summary\n- Changes the fallback listen port in `app/main.py` (line 80) from `8080` to `8000`. It applies only when the `PORT` environment variable is unset.\n- No other files change. Anything that assumes the service listens on 8080 without setting `PORT` explicitly is not updated in this diff.\n\n### Risks\n- **Port mismatch with the rest of the stack (correctness and availability).** `app/main.py:80`. If an environment does not set `PORT`, the process will now bind to 8000. Anything still pointing at 8080 would then fail, and the result could be failed health checks, targets marked unhealthy, or an outage. Places to check:\n  - a Dockerfile `EXPOSE`\n  - container or task definition port mappings\n  - load balancer target group ports or health checks in Terraform\n  - security group rules\n  - docker-compose mappings\n  - CI smoke tests or local dev scripts\n- **Partial change.** Changing a default port normally needs matching edits in infrastructure, CI or docs. None appear here, so the change is either incomplete or depends on every environment already setting `PORT`.\n- **Reversibility.** Reverting the code is a one-line revert. If a deploy breaks traffic, recovery still takes a redeploy.\n\n### Questions\n- Does every deployed environment set `PORT` explicitly? If so, this change only affects local or dev runs. If not, which environments rely on the 8080 default?\n- Are there Terraform resources, a Dockerfile, health check paths or workflow steps referencing 8080 that should change in the same PR?\n- What motivated the switch? 8080 is also a common convention for this kind of service. If a specific platform expects 8000, naming it would help reviewers judge whether other components need to follow.\n\n### Not verified\n- Whether `PORT` is set in the deployed task, container or runtime configuration for each environment.\n- The ports configured in already-deployed infrastructure: load balancer listeners and target groups, security groups, health checks. Those files are not in this diff.\n- Whether CI jobs, integration tests or local tooling (Makefile, compose files, README instructions) hard-code 8080.\n- How the running service behaves after deploy, including whether health checks pass on the new port.",
+  "stop_reason": "end_turn",
+  "model_served": "claude-opus-5-5",
+  "request_id": "req_011Ch6RZ6UgL9YjWC6JomB4u",
+  "input_tokens": 667,
+  "output_tokens": 980,
+  "fell_back": false,
+  "duration_ms": 11054,
+  "defect": "D3",
+  "title": "Use the conventional default port",
+  "timestamp": "2026-11-16T10:09:28.895374+00:00"
+}

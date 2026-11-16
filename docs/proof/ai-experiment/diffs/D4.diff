@@ -1,0 +1,12 @@
+diff --git a/app/main.py b/app/main.py
+index 5cea3a1..5af108d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -79,6 +79,7 @@ def main():
+     host = os.environ.get("HOST", "0.0.0.0")  # noqa: S104 - bind inside the container
+     port = int(os.environ.get("PORT", "8080"))
+     version = os.environ.get("APP_VERSION", "dev")
++    database_url = os.environ["DATABASE_URL"]
+ 
+     server = make_server(host, port, version)
+ 

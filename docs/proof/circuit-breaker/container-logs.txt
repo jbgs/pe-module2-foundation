@@ -1,0 +1,14 @@
+08:54:26 {"event": "start", "version": "a2b29c357d43035565decc1b7288e20c90d9d75c", "port": 8080}
+09:22:03 Traceback (most recent call last):
+09:22:03 with open("/tmp/started-at", "w", encoding="utf-8") as fh:
+09:22:03 OSError: [Errno 30] Read-only file system: '/tmp/started-at'
+09:23:03 Traceback (most recent call last):
+09:23:03 with open("/tmp/started-at", "w", encoding="utf-8") as fh:
+09:23:03 OSError: [Errno 30] Read-only file system: '/tmp/started-at'
+09:23:58 Traceback (most recent call last):
+09:23:58 with open("/tmp/started-at", "w", encoding="utf-8") as fh:
+09:23:58 OSError: [Errno 30] Read-only file system: '/tmp/started-at'
+09:24:49 Traceback (most recent call last):
+09:24:49 with open("/tmp/started-at", "w", encoding="utf-8") as fh:
+09:24:49 OSError: [Errno 30] Read-only file system: '/tmp/started-at'
+09:31:52 {"event": "start", "version": "6622d2799c204a43afada2f47b99ee941830bfa3", "port": 8080}

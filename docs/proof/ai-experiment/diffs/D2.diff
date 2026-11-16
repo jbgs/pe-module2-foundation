@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 5cea3a1..3877ead 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -40,6 +40,8 @@ class Handler(BaseHTTPRequestHandler):
+         if self.path == "/":
+             return 200, {"service": SERVICE_NAME, "version": self.server.version}
+         if self.path == "/healthz":
++            if not os.path.exists("/app/ready"):
++                return 503, {"status": "not ready"}
+             return 200, {"status": "ok"}
+         return 404, {"error": "not found"}
+ 

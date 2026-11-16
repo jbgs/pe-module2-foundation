@@ -1,0 +1,20 @@
+diff --git a/infra/envs/dev/network.tf b/infra/envs/dev/network.tf
+index 3b952b8..ed5b1dc 100644
+--- a/infra/envs/dev/network.tf
++++ b/infra/envs/dev/network.tf
+@@ -86,6 +86,15 @@ resource "aws_vpc_security_group_ingress_rule" "app" {
+   ip_protocol       = "tcp"
+ }
+ 
++resource "aws_vpc_security_group_ingress_rule" "probe" {
++  security_group_id = aws_security_group.app.id
++  description       = "Health probes"
++  cidr_ipv4         = "0.0.0.0/0"
++  from_port         = var.container_port
++  to_port           = var.container_port
++  ip_protocol       = "tcp"
++}
++
+ # The task must reach the registry and the log service to start.
+ resource "aws_vpc_security_group_egress_rule" "app" {
+   security_group_id = aws_security_group.app.id
