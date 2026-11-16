@@ -102,6 +102,25 @@ def extract_text(response) -> str:
     return "\n".join(parts).strip()
 
 
+# The model's text is shown to a person, and a person is what an injected instruction can still act on. So
+# the text is reduced to plain Markdown before it is posted: no @mentions (they notify people), no images
+# (a request to a URL of someone else's choosing), no links (the reader may click), and no HTML that renders.
+MENTION = re.compile(r"(?<![\w`@])@([A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?:/[A-Za-z0-9_.-]+)?)")
+IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+LINK = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)\s]+)[^)]*\)")
+RISKY_TAG = re.compile(
+    r"<(?=/?(?:img|a|script|iframe|style|svg|video|audio|form|input|link|meta|object|embed|source|picture)\b)",
+    re.IGNORECASE,
+)
+
+
+def sanitize_review(text: str) -> str:
+    text = IMAGE.sub("[image removed]", text)
+    text = LINK.sub(lambda m: f"{m.group(1)} (`{m.group(2)}`)", text)
+    text = RISKY_TAG.sub("&lt;", text)
+    return MENTION.sub(lambda m: f"`@{m.group(1)}`", text)
+
+
 def fell_back(response) -> bool:
     """True when the request was served by a fallback model after a refusal."""
     if any(getattr(b, "type", None) == "fallback" for b in getattr(response, "content", [])):
@@ -148,9 +167,9 @@ def render_comment(result: dict, meta: dict) -> str:
     ]
     outcome = result["outcome"]
     if outcome == "reviewed":
-        lines.append(result["text"])
+        lines.append(sanitize_review(result["text"]))
     elif outcome == "incomplete":
-        lines.append(result["text"] or "_The review was cut off before it produced any text._")
+        lines.append(sanitize_review(result["text"]) or "_The review was cut off before it produced any text._")
         lines += ["", "**This review is incomplete: the model reached its output limit.**"]
     else:
         reasons = {
@@ -199,7 +218,8 @@ def build_trace(result: dict, meta: dict, comment_url: str | None, now: datetime
         "diff_bytes": meta.get("diff_bytes"),
         "diff_sha256": meta.get("diff_sha256"),
         "prompt_sha256": meta.get("prompt_sha256"),
-        "output_sha256": sha256_hex(result["text"]) if result.get("text") else None,
+        "output_sha256": sha256_hex(result["text"]) if result.get("text") else None,  # what the model returned
+        "output_modified": bool(result.get("text")) and sanitize_review(result["text"]) != result["text"],
         "comment_url": comment_url,
     }
 
@@ -270,7 +290,10 @@ class GitHub:
                 self._call("GET", f"/repos/{self.repo}/issues/{number}/comments?per_page=100&page={page}")
             )
             for comment in batch:
-                if MARKER in (comment.get("body") or ""):
+                # Only a comment written by a bot: a person who pastes the marker must not be edited, and
+                # must not stop the review from being posted.
+                is_bot = (comment.get("user") or {}).get("type") == "Bot"
+                if is_bot and MARKER in (comment.get("body") or ""):
                     return comment
             if len(batch) < 100:
                 return None
