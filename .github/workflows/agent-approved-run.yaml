@@ -1,0 +1,195 @@
+name: Agent approved run
+
+# The agent produces a result and asks to take it out of the sandbox. That is human-gated: nothing leaves until a
+# person says yes. Run it by hand, from main:
+#
+#   1. request   the agent runs, and the policy holds the export (the log says the approval is pending);
+#   2. approval  a job that waits behind the GitHub Environment `agent-approval`: a required reviewer approves it, and
+#                a step checks, with this run's token, that GitHub has a clear approval to show;
+#   3. approved  reads who approved from GitHub itself (nothing travels between jobs), and the agent runs again, with
+#                the approval attached to the export and to nothing else;
+#   4. publish   both logs go to the audit store: the request with its approval pending, and the run that followed it.
+#
+# The approval is never supplied by the agent. It comes from the review history of this run, which GitHub writes when a
+# required reviewer of the environment approves; if the environment has no required reviewers the history is empty and
+# step 2 refuses to go on. The environment, with its reviewers and its restriction to main, is set in the repository
+# (it cannot be set from code): see docs/adr/0007-human-gate.md.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  request:
+    name: The agent asks to export its result
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned policy engine
+        env:
+          OPA_VERSION: v1.21.4
+          OPA_SHA256: 2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630
+        run: |
+          curl -fsSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  opa" | sha256sum --check --strict
+          mkdir -p "${HOME}/bin"
+          install -m 0755 opa "${HOME}/bin/opa"
+          echo "${HOME}/bin" >> "${GITHUB_PATH}"
+
+      - name: Build the sandbox image
+        run: docker build -t agent-sandbox:ci agent/sandbox
+
+      # No approval yet: the export is a gated action, so it waits, and nothing leaves the sandbox.
+      - name: The policy decides, the export waits for a person
+        run: python3 agent/run_agent.py --mode enforce --label request --out agent/out-request
+
+      - name: Audit gate
+        run: python3 agent/audit_verify.py agent/out-request/audit-enforce.jsonl --manifest agent/out-request/audit-enforce.manifest.json --expect agent/plan.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: request-log
+          path: agent/out-request/
+          retention-days: 90
+
+  # This job waits for a person. The environment `agent-approval` has a required reviewer, so GitHub holds the job until
+  # they approve or reject it. Its name must be exactly the one passed to --job-name below: the time of the approval is
+  # taken from the start of this job, which GitHub starts right after the approval.
+  approval:
+    name: A person approves the export
+    needs: request
+    if: github.ref == 'refs/heads/main'
+    environment: agent-approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Fails if GitHub has no clear approval to show: a rejection, an environment with no required reviewers, more than
+      # one review (a re-run), or any answer in doubt. The result is not passed on: the job that uses the approval reads
+      # it again from GitHub itself, so the file does not have to be trusted in transit.
+      - name: Check that GitHub has an approval to show
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          python3 agent/fetch_approval.py
+          --action export_result
+          --environment agent-approval
+          --job-name "A person approves the export"
+          --out "${RUNNER_TEMP}/approval-check.json"
+
+  approved:
+    name: The agent runs again, with the approval
+    needs: approval
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned policy engine
+        env:
+          OPA_VERSION: v1.21.4
+          OPA_SHA256: 2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630
+        run: |
+          curl -fsSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  opa" | sha256sum --check --strict
+          mkdir -p "${HOME}/bin"
+          install -m 0755 opa "${HOME}/bin/opa"
+          echo "${HOME}/bin" >> "${GITHUB_PATH}"
+
+      - name: Build the sandbox image
+        run: docker build -t agent-sandbox:ci agent/sandbox
+
+      # Read from GitHub, here, by the job that uses it. The approval names the export and nothing else.
+      - name: Read from GitHub who approved
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          python3 agent/fetch_approval.py
+          --action export_result
+          --environment agent-approval
+          --job-name "A person approves the export"
+          --out approval/approval.json
+
+      # modify_policy and deploy_dev stay pending.
+      - name: The policy decides, with the approval of a person
+        run: python3 agent/run_agent.py --mode enforce --label approved --approval approval/approval.json --out agent/out-approved
+
+      - name: Audit gate
+        run: python3 agent/audit_verify.py agent/out-approved/audit-enforce.jsonl --manifest agent/out-approved/audit-enforce.manifest.json --expect agent/plan.json
+
+      # What leaves the sandbox is exactly one result, and only because a person approved it.
+      - name: The result left the sandbox, and only that
+        run: |
+          test -s agent/out-approved/exported-result.txt
+          echo "exported: $(cat agent/out-approved/exported-result.txt)"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: approved-log
+          path: agent/out-approved/
+          retention-days: 90
+
+  # Writes to the audit store. It never declares an environment (it would change the subject of the token and stop
+  # matching the writer role), and it is the only job here that can reach AWS.
+  publish:
+    name: Publish the request and the approved run
+    needs: [request, approved]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: request-log
+          path: agent/out-request
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: approved-log
+          path: agent/out-approved
+
+      - name: Audit gate on what was fetched
+        run: |
+          status=0
+          python3 agent/audit_verify.py agent/out-request/audit-enforce.jsonl --manifest agent/out-request/audit-enforce.manifest.json --expect agent/plan.json || status=1
+          python3 agent/audit_verify.py agent/out-approved/audit-enforce.jsonl --manifest agent/out-approved/audit-enforce.manifest.json --expect agent/plan.json || status=1
+          exit "${status}"
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-audit-writer
+          aws-region: us-east-1
+
+      - name: Publish, then try to change what was published
+        run: >
+          python3 agent/publish_audit.py publish
+          --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          --entry "request=agent/out-request:enforce"
+          --entry "approved=agent/out-approved:enforce"

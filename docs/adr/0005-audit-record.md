@@ -81,7 +81,7 @@ log at the end, would lose exactly the actions that matter most.
 
 A gate that has never refused anything proves nothing, so it is tested three ways: 53 unit tests, most of which damage
 a good log and require the gate to notice; a **test of the tests**, `agent/mutation_check.py`, which weakens the
-verifier, the log writer and the publisher in 32 ways and requires the tests to notice each (it runs in CI, so the claim is
+verifier, the log writer and the publisher in 44 ways and requires the tests to notice each (it runs in CI, so the claim is
 reproducible); and, in CI, a step that damages the run's own log in four ways and requires each to be refused.
 
 The mutation check found, when it was first run, that four rules were covered only indirectly: because every record
@@ -95,10 +95,10 @@ written and where its head is kept, not from these checks.
 
 ## What is not true yet
 
-- **Approval.** No approval path exists, so every gated action is recorded `pending`. The field is where the approval
-  from a person will go; the rules about it (a different person from the agent, a source, a time) are enforced and
-  tested now.
-- **Immutability.** See above: the next change.
+- **Approval.** A real approval reaches the record through the GitHub Environment `agent-approval` ([ADR 0007](0007-human-gate.md));
+  the rules about it (a different person from the agent, a source, a time, evidence) are enforced and tested. An action
+  that no one has approved is recorded `pending`.
+- **Immutability.** Done: the records are kept in the audit store ([ADR 0006](0006-audit-store.md)).
 - **A separate identity for the agent.** The agent has an id in every record, but the actions of the run still
   happen under the pipeline's identity.
 - **The agent is a script.** A model-driven agent would also need the hash of its prompt, the model and the

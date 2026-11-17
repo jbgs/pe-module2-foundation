@@ -98,6 +98,7 @@ def check_action(rec: dict, mode: str, agent_id: str, policy_sha: str) -> list[s
             and approval["approver"] != agent_id
             and approval["decided_at"]
             and approval["source"]
+            and approval["evidence"]
         )
         if not ok:
             problems.append(f"{where}: a human-gated action ran without an approval from someone other than the agent")
