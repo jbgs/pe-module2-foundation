@@ -6,7 +6,7 @@ change them afterwards. The reasoning and the limits are in [ADR 0006](../../doc
 | Resource | What it does |
 |---|---|
 | S3 bucket with Object Lock | keeps the records; versioned, encrypted, no public access, owned by the account |
-| Object Lock, governance mode | a written object cannot be deleted or overwritten for `retention_days` (1 by default) |
+| Object Lock, governance mode | a written object cannot be deleted or overwritten for `retention_days` (7 by default) |
 | Bucket policy | refuses insecure transport; refuses any write that does not carry `If-None-Match: *` (write once); denies the writer everything but writing |
 | `*-gha-audit-writer` role | assumable **only by runs on `main`** of this repository; may only `PutObject` under `agent-runs/` |
 
@@ -43,7 +43,7 @@ python3 agent/audit_verify.py audit.jsonl --manifest manifest.json
 
 A lab does not need to keep records forever, and the bucket refuses to be destroyed while it holds locked objects.
 
-1. Wait for the retention to end (1 day), or, with an administrator profile, delete each version with
+1. Wait for the retention to end (7 days), or, with an administrator profile, delete each version with
    `aws s3api delete-object --bucket "$BUCKET" --key <key> --version-id <id> --bypass-governance-retention`.
 2. `terraform destroy` (the bucket is created with `force_destroy = false`).
 

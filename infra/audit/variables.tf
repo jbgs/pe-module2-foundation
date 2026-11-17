@@ -43,11 +43,12 @@ variable "name_prefix" {
 variable "retention_days" {
   description = <<-EOT
     How long a new object cannot be deleted or overwritten (Object Lock, governance mode).
-    Short on purpose in a lab: a privileged administrator can still bypass governance mode to clean up, which
-    compliance mode would not allow. Raise it where the records have to be kept.
+    Short in a lab: a privileged administrator can still bypass governance mode to clean up, which compliance
+    mode would not allow, so a longer window costs nothing in reversibility. Raise it where the records have
+    to be kept.
   EOT
   type        = number
-  default     = 1
+  default     = 7
 
   validation {
     condition     = var.retention_days >= 1

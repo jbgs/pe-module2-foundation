@@ -137,7 +137,10 @@ data "aws_iam_policy_document" "bucket" {
   }
 
   # The identity policy of the writer grants nothing but PutObject; this denies the rest explicitly, so that a
-  # permission added to the role by mistake later would still not work.
+  # permission added to the role by mistake later would still not work. It matches the role by name with a
+  # condition, not by naming the principal: a policy that names a role is stored against the role's unique ID, so
+  # it would fail to save if the role did not exist yet, and would silently stop matching if the role were
+  # deleted and created again.
   statement {
     sid         = "DenyTheWriterEverythingButWriting"
     effect      = "Deny"
@@ -148,8 +151,14 @@ data "aws_iam_policy_document" "bucket" {
     ]
 
     principals {
-      type        = "AWS"
-      identifiers = [local.writer_arn]
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.writer_arn]
     }
   }
 }
@@ -182,7 +191,8 @@ data "aws_iam_policy_document" "trust_writer" {
 
     # The immutable IDs of the owner and the repository, as in the other roles: a repository deleted and recreated
     # under the same name has other IDs and cannot assume this role. Main only: a pull request, whose workflow
-    # its author can change, never writes to the store.
+    # its author can change, never writes to the store. The job that writes must not declare a GitHub
+    # `environment:`, which would change the subject of the token and stop matching this one.
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
