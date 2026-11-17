@@ -1,0 +1,32 @@
+{
+  "name": "agent-sandbox",
+  "title": "A sandbox for an agent, with synthetic data",
+  "summary": "A clean copy of the project's agent workspace with invented data only, ready for an agent to run in. Made in seconds, on the Builder's own machine or in CI.",
+  "kind": "local",
+  "keywords": {
+    "sandbox": 3,
+    "agent": 3,
+    "agents": 3,
+    "synthetic": 2,
+    "fake data": 3,
+    "invented data": 3,
+    "experiment": 1,
+    "analyse": 1,
+    "analyze": 1,
+    "churn": 1,
+    "safe": 1,
+    "isolated": 1
+  },
+  "defaults": {
+    "network": "none",
+    "root_filesystem": "read-only",
+    "capabilities": "none",
+    "memory": "128m",
+    "processes": "64",
+    "data": "synthetic only",
+    "policy": "policy/agent.rego: default deny, a person must approve what leaves the sandbox or changes the policy",
+    "audit": "every action is recorded in a hash-chained log, kept in the immutable audit store when it runs on main"
+  },
+  "teardown": "delete the folder: it holds nothing but a copy of the synthetic data, the plan and the policy",
+  "cost": "none: it runs in a container on the Builder's machine or on a throwaway CI runner"
+}

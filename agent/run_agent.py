@@ -38,6 +38,7 @@ from pathlib import Path
 
 import audit
 import audit_verify
+import environment
 
 AGENT_ID = "agent-sandbox-01"
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +74,7 @@ CONTROLS = [
     ("data", "read_regulated_data"),
 ]
 SYNTHETIC_DIR = ROOT / "agent" / "synthetic"  # the only data the sandbox gets, read-only
+POLICY_DIR = ROOT / "policy"  # the rules that judge each action
 STANDIN_FILE = ROOT / "agent" / "regulated-standin" / "customers.csv"  # never mounted anywhere (except by the control)
 
 
@@ -125,7 +127,43 @@ def image_id() -> str | None:
     return done.stdout.strip() or None
 
 
-def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None, label: str | None = None) -> audit.AuditLog:
+def looks_regulated(name: str) -> bool:
+    """Whole words only: a folder called `unregulated` is not regulated data."""
+    return bool({"regulated", "customers"} & set(re.split(r"[^a-z0-9]+", name.lower())))
+
+
+def check_data_dir(path: Path) -> None:
+    """The sandbox is given synthetic data only, and the only data known to be synthetic is the platform's own. So the
+    files must be, byte for byte, those of agent/synthetic: a file with another name, or the same name and other content,
+    is refused, whoever asks. A name that looks like regulated data is refused first, with a clearer reason."""
+    files = [p for p in sorted(path.rglob("*")) if p.is_file()]
+    if not files:
+        raise SystemExit(f"refusing to mount {path}: it holds no data")
+    if looks_regulated(path.name) or any(looks_regulated(p.relative_to(path).as_posix()) for p in files):
+        raise SystemExit(f"refusing to mount {path}: it looks like regulated data, and the sandbox gets synthetic data only")
+    known = {p.name: audit.sha256_hex(p.read_bytes()) for p in (ROOT / "agent" / "synthetic").iterdir() if p.is_file()}
+    for p in files:
+        if known.get(p.relative_to(path).as_posix()) != audit.sha256_hex(p.read_bytes()):
+            raise SystemExit(f"refusing to mount {path}: {p.relative_to(path)} is not the platform's synthetic data, "
+                             f"which is the only data known to be synthetic")
+
+
+def check_policy_dir(path: Path) -> None:
+    """What judges the agent is the platform's policy, not whatever a caller points at. Every rule file given must be
+    identical to the one in policy/, and agent.rego must be among them. An environment made under an older policy is
+    refused until it is made again."""
+    repo = {p.name: p.read_bytes() for p in (ROOT / "policy").glob("*.rego")}
+    given = {p.name: p.read_bytes() for p in path.glob("*.rego")}
+    if "agent.rego" not in given:
+        raise SystemExit(f"refusing to use {path} as the policy: it has no agent.rego")
+    for name, content in given.items():
+        if repo.get(name) != content:
+            raise SystemExit(f"refusing to use {path} as the policy: {name} is not the platform's policy "
+                             f"(an environment made under another policy must be made again)")
+
+
+def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None, label: str | None = None,
+              environment: str | None = None, environment_hash: str | None = None) -> audit.AuditLog:
     env = os.environ
     if env.get("GITHUB_RUN_ID"):
         run_id = f"{env['GITHUB_RUN_ID']}-{env.get('GITHUB_RUN_ATTEMPT', '1')}-{mode}"
@@ -143,6 +181,9 @@ def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | N
         policy_sha256=sha,
         policy_engine=engine,
         sandbox={"image_id": image_id(), "limits": limits_description(), "flags_sha256": flags_sha256()},
+        # The environment of the golden path that this run belongs to, with the hash of the data and the policy it was made
+        # with. A run without one is going around the path.
+        environment={"id": environment, "template_sha256": environment_hash} if environment else None,
     )
     return log
 
@@ -226,7 +267,7 @@ def utc_now() -> str:
 def policy_sha() -> str:
     """One hash for the whole policy, so a record says which rules judged the action."""
     digest = hashlib.sha256()
-    for path in sorted((ROOT / "policy").glob("*.rego")):
+    for path in sorted(POLICY_DIR.glob("*.rego")):
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()
 
@@ -252,7 +293,7 @@ def decide(item: dict, approval: dict | None = None) -> dict:
     if approval:
         policy_input["approval"] = {"approver": approval["approver"], "approved": approval["approved"]}
     done = subprocess.run(
-        [OPA, "eval", "-d", str(ROOT / "policy"), "-I", "-f", "json", "data.agent.policy.decision"],
+        [OPA, "eval", "-d", str(POLICY_DIR), "-I", "-f", "json", "data.agent.policy.decision"],
         input=json.dumps(policy_input),
         capture_output=True,
         text=True,
@@ -451,23 +492,56 @@ def run_controls(out: Path, sha: str, engine: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """The data and the policy directories are module state for the length of one run, and are put back afterwards."""
+    global SYNTHETIC_DIR, POLICY_DIR
+    saved = (SYNTHETIC_DIR, POLICY_DIR)
+    try:
+        return _main(argv)
+    finally:
+        SYNTHETIC_DIR, POLICY_DIR = saved
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mode", choices=["enforce", "bypass", "weakening"], required=True)
     parser.add_argument("--plan", default=str(ROOT / "agent" / "plan.json"))
     parser.add_argument("--out", default=str(ROOT / "agent" / "out"))
     parser.add_argument("--approval", help="an approval of one gated action, read from GitHub by a platform step")
     parser.add_argument("--label", help="a name for this log within its workflow run (it becomes part of the run id)")
+    parser.add_argument("--environment", help="the id of the golden-path environment this run belongs to")
+    parser.add_argument("--data", help="the synthetic data to mount (default: agent/synthetic)")
+    parser.add_argument("--policy-dir", help="the policy to judge with (default: policy/)")
     args = parser.parse_args(argv)
     if args.approval and args.mode != "enforce":
         parser.error("--approval only makes sense in enforce mode: that is where the policy decides")
 
+    global SYNTHETIC_DIR, POLICY_DIR
+    environment_hash = None
+    if args.environment:
+        # A run that says it belongs to an environment of the path is checked against it: the environment has to exist,
+        # be the one named, and be as it was made; and the data and the policy used have to be its own.
+        env_dir = Path(args.plan).resolve().parent
+        problems = environment.verify(env_dir, args.environment)
+        if problems:
+            raise SystemExit("refusing to run in environment " + args.environment + ": " + "; ".join(problems))
+        for given, own, label in ((args.data, env_dir / "data", "data"), (args.policy_dir, env_dir / "policy", "policy")):
+            if given and Path(given).resolve() != own.resolve():
+                raise SystemExit(f"refusing to run in environment {args.environment}: the {label} is not the environment's own")
+        args.data, args.policy_dir = args.data or str(env_dir / "data"), args.policy_dir or str(env_dir / "policy")
+        environment_hash = environment.template_of(env_dir)
+    if args.data:
+        SYNTHETIC_DIR = Path(args.data).resolve()
+    if args.policy_dir:
+        POLICY_DIR = Path(args.policy_dir).resolve()
+        check_policy_dir(POLICY_DIR)
+    check_data_dir(SYNTHETIC_DIR)
     sha, engine = policy_sha(), engine_version()
     if args.mode == "weakening":
         return run_controls(Path(args.out), sha, engine)
     plan_bytes = Path(args.plan).read_bytes()
     plan = json.loads(plan_bytes.decode("utf-8"))
     approval = load_approval(args.approval) if args.approval else None
-    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out), args.label)
+    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out), args.label, args.environment, environment_hash)
     records, everything = [], ""
     for item in plan:
         record, text = evaluate(item, args.mode, approval=approval)

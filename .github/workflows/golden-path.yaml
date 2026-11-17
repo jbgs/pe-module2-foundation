@@ -1,0 +1,96 @@
+name: Golden path
+
+# A Builder describes what they need, in their own words, and gets an environment that is compliant by default, with no
+# ticket and no one to wait for. Run it by hand, and type the request in the form.
+#
+# - The request is matched to a paved road (golden-path/paved-roads). One that no road covers is refused, and that is
+#   recorded too: it is the sign that the path is missing something.
+# - Every request, covered or not, is written to a usage log, and the log goes to the audit store, so that adoption is
+#   counted in one place and cannot be edited afterwards.
+#
+# What a Builder types is never put into a command. It reaches the script as an environment variable, which is the
+# difference between a request and a command line.
+on:
+  workflow_dispatch:
+    inputs:
+      intent:
+        description: "What you need, in your own words. It is KEPT FOR GOOD: do not paste secrets or personal data (for example: a sandbox for an agent to analyse churn data)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  make:
+    name: Make the environment from the request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: The golden path
+        env:
+          INTENT: ${{ inputs.intent }}
+        run: |
+          status=0
+          python3 golden-path/golden_path.py new "${INTENT}" \
+            --dest golden-path/out/environments --usage golden-path/out/usage.jsonl --source workflow || status=$?
+          # 2 is a request that no road covers: not a failure of the path, but a result it records and reports.
+          if [ "${status}" -eq 2 ]; then
+            echo "::warning title=Golden path::The path does not cover this request. It was recorded, so the platform knows what is missing."
+          elif [ "${status}" -ne 0 ]; then
+            exit "${status}"
+          fi
+
+      # Only this request: each run starts with an empty usage log. The count across all requests is made from the audit store
+      # with `golden_path.py report --store`, by someone who can read it.
+      - name: This request
+        if: always()
+        run: python3 golden-path/golden_path.py report --usage golden-path/out/usage.jsonl >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: environment
+          path: golden-path/out/environments
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: usage
+          path: golden-path/out/usage.jsonl
+          retention-days: 90
+
+  # Writes to the audit store, from main only, with the role that can only write. It never declares an environment: it
+  # would change the subject of the token and stop matching the role.
+  publish:
+    name: Record the request in the audit store
+    needs: make
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: usage
+          path: usage
+
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-audit-writer
+          aws-region: us-east-1
+
+      - name: Publish the usage log
+        run: python3 golden-path/golden_path.py publish --usage usage/usage.jsonl --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
