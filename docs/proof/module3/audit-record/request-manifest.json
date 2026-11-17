@@ -1,0 +1,9 @@
+{
+  "schema": "agent-audit-manifest/1",
+  "run_id": "44068206838-1-enforce-request",
+  "mode": "enforce",
+  "records": 16,
+  "head_sha256": "969f84e2ee41c1738e0b638626ae8cc6477ad15b85d6253e077d490193aa1a67",
+  "first_timestamp": "2026-11-17T10:48:41Z",
+  "last_timestamp": "2026-11-17T10:48:43Z"
+}
