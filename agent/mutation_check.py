@@ -61,7 +61,12 @@ MUTANTS = [
     ("publish_audit.py", "a write is no longer conditional (it could replace a record)", '            "--if-none-match", "*",\n', ""),
     ("publish_audit.py", "the checksum is not sent with the write", '            "--checksum-sha256", checksum,\n', ""),
     ("publish_audit.py", "a failed write is not reported", 'return all(r["ok"] for r in results)', "return True"),
-    ("publish_audit.py", "the head pointer is not written", '            results.append(put_once(bucket, head_key(manifest["head_sha256"]), pointer, runner))\n', ""),
+    (
+        "publish_audit.py",
+        "the head pointer is not written",
+        'recorded = put_once(bucket, head_key(manifest["head_sha256"]), pointer, runner)',
+        'recorded = {"key": "", "ok": True, "error": None, "version_id": None, "checksum": ""}',
+    ),
     ("publish_audit.py", "an accepted attempt to change a record counts as refused", "            ok = got == expected\n", "            ok = True\n"),
     (
         "publish_audit.py",
@@ -70,6 +75,9 @@ MUTANTS = [
         "problems += []",
     ),
     ("publish_audit.py", "a missing head pointer is not reported", 'if code != 0:\n                    problems.append(f"{mode}: the head pointer is missing', 'if False:\n                    problems.append(f"{mode}: the head pointer is missing'),
+    ("publish_audit.py", "a head that was already recorded is a failure, so a retry cannot succeed", 'recorded["ok"], recorded["note"] = True, "already recorded"', 'pass'),
+    ("publish_audit.py", "the log of the controls is not checked against the code's expectation", 'else controls_plan()', 'else None'),
+    ("publish_audit.py", "a manifest that can be replaced is not caught", '"ok": got == "PreconditionFailed"}', '"ok": True}'),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]
 

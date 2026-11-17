@@ -43,6 +43,7 @@ class FakeS3:
 
     def __init__(self, role="writer", strict=True):
         self.objects, self.commands, self.role, self.strict, self._version = {}, [], role, strict, 0
+        self.sent = []  # (key, the checksum sent, the bytes sent), as S3 would see them
 
     def run(self, command, **kwargs):
         self.commands.append(command)
@@ -61,6 +62,7 @@ class FakeS3:
             if key in self.objects:
                 return denied("PreconditionFailed")
             body = Path(flags["--body"]).read_bytes()
+            self.sent.append((key, flags.get("--checksum-sha256"), body))
             if "--checksum-sha256" in flags and flags["--checksum-sha256"] != base64.b64encode(hashlib.sha256(body).digest()).decode():
                 return denied("BadDigest")
             self._version += 1
@@ -84,11 +86,18 @@ class FakeS3:
         return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
 
-def make_out(tmp):
+def make_out(tmp, controls=False):
+    """Three logs on disk. With controls=True the log of the controls follows the plan that the code expects."""
+    import run_agent
+
     out = Path(tmp) / "out"
     out.mkdir()
     for mode in pa.MODES:
-        log = T.build(mode)
+        if mode == "weakening" and controls:
+            items = [{"action": a, "kind": "attempt"} for _, a in run_agent.CONTROLS]
+            log = T.build(mode, items)
+        else:
+            log = T.build(mode)
         (out / f"audit-{mode}.jsonl").write_text(log.text(), encoding="utf-8")
         (out / f"audit-{mode}.manifest.json").write_text(json.dumps(log.manifest()), encoding="utf-8")
     return out
@@ -146,14 +155,17 @@ class Publish(unittest.TestCase):
             self.assertEqual(pointer["head_sha256"], head)
             self.assertEqual(pointer["log_key"], pa.run_key("100-1", mode, "audit.jsonl"))
 
-    def test_every_write_is_conditional_and_carries_its_checksum(self):
+    def test_every_write_is_conditional_and_carries_the_checksum_of_what_was_sent(self):
         self.publish()
         puts = [c for c in self.s3.commands if c[2] == "put-object"]
         self.assertEqual(len(puts), 9)
         for command in puts:
             flags, _ = parse(command[3:])
             self.assertEqual(flags["--if-none-match"], "*")
-            self.assertEqual(flags["--checksum-sha256"], pa.checksum_b64(Path(flags["--body"]).read_bytes()) if Path(flags["--body"]).exists() else flags["--checksum-sha256"])
+        self.assertEqual(len(self.s3.sent), 9)
+        for key, checksum, body in self.s3.sent:
+            # measured against the bytes the store received, which the pointer files (deleted afterwards) cannot dodge
+            self.assertEqual(checksum, pa.checksum_b64(body), key)
 
     def test_the_checksum_sent_is_that_of_the_file(self):
         path = self.out / "audit-enforce.jsonl"
@@ -178,6 +190,27 @@ class Publish(unittest.TestCase):
         self.assertEqual([r["key"] for r in failed], [taken])
         self.assertEqual(failed[0]["error"], "PreconditionFailed")
         self.assertEqual(self.s3.objects[taken], b"a forged log, written first")
+
+    def test_a_head_that_was_already_recorded_is_not_a_failure(self):
+        # A retry of the job reuses the artifact, so the pointer (named after the head hash) already exists.
+        self.publish()
+        self.s3b = FakeS3("writer")
+        head = json.loads((self.out / "audit-enforce.manifest.json").read_text())["head_sha256"]
+        self.s3b.objects[pa.head_key(head)] = b"a pointer written by an earlier attempt"
+        results = pa.publish("100-2", self.out, BUCKET, self.s3b.run)
+        self.assertTrue(pa.publish_ok(results))
+        pointer = next(r for r in results if r["key"] == pa.head_key(head))
+        self.assertEqual(pointer["note"], "already recorded")
+        self.assertEqual(self.s3b.objects[pa.head_key(head)], b"a pointer written by an earlier attempt")
+
+    def test_a_log_that_already_exists_is_still_a_failure_on_retry(self):
+        self.publish()
+        self.assertFalse(pa.publish_ok(self.publish()))
+
+    def test_the_summary_says_when_a_head_was_already_recorded(self):
+        text = pa.summary([{"key": "k", "ok": True, "note": "already recorded", "error": "PreconditionFailed",
+                            "version_id": None, "checksum": "abcdefghijklmnop"}], [])
+        self.assertIn("already recorded", text)
 
     def test_the_summary_never_names_the_bucket(self):
         text = pa.summary(self.publish(), pa.refusals(BUCKET, pa.run_key("100-1", "enforce", "audit.jsonl"), "v1", self.s3.run))
@@ -221,12 +254,51 @@ class Refusals(unittest.TestCase):
         self.assertEqual(checks[0]["got"], "PreconditionFailed")
 
 
+class WriteOnce(unittest.TestCase):
+    """The rule that a name is written once holds for the manifest and the pointer, not only for the log."""
+
+    def test_every_kind_of_object_refuses_a_second_write(self):
+        s3 = FakeS3("writer")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = make_out(tmp)
+            results = pa.publish("100-1", out, BUCKET, s3.run)
+            head = json.loads((out / "audit-enforce.manifest.json").read_text())["head_sha256"]
+        keys = [("manifest", pa.run_key("100-1", "enforce", "manifest.json")), ("head pointer", pa.head_key(head))]
+        checks = pa.write_once_checks(BUCKET, keys, s3.run)
+        self.assertTrue(pa.publish_ok(results))
+        self.assertEqual([c["ok"] for c in checks], [True, True])
+
+    def test_a_store_that_lets_a_manifest_be_replaced_is_caught(self):
+        checks = pa.write_once_checks(BUCKET, [("manifest", "agent-runs/x")], FakeS3("writer", strict=False).run)
+        self.assertFalse(checks[0]["ok"])
+        self.assertEqual(checks[0]["got"], "ACCEPTED")
+
+
+class Controls(unittest.TestCase):
+    def test_the_expectation_for_the_controls_comes_from_the_code(self):
+        import run_agent
+
+        self.assertEqual(pa.controls_plan(), [{"action": a} for _, a in run_agent.CONTROLS])
+
+    def test_reading_back_checks_the_controls_log_against_that_expectation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = make_out(tmp)
+            writer = FakeS3("writer")
+            pa.publish("100-1", out, BUCKET, writer.run)
+            reader = FakeS3("admin")
+            reader.objects = writer.objects
+            # make_out builds the weakening log from the sample plan, not from the controls, so the store's copy
+            # does not match what the code expects of a log of the controls: the gate must say so
+            problems = pa.verify_store("100-1", BUCKET, T.PLAN, reader.run)
+        self.assertTrue(any(p.startswith("weakening:") and "not the actions planned" in p for p in problems))
+
+
 class Verify(unittest.TestCase):
     """Reading the logs back, with an identity that may read, and running the audit gate on them."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.out = make_out(self.tmp.name)
+        self.out = make_out(self.tmp.name, controls=True)
         self.writer = FakeS3("writer")
         pa.publish("100-1", self.out, BUCKET, self.writer.run)
         self.reader = FakeS3("admin")

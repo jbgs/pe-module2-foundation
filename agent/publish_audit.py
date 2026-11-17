@@ -125,8 +125,20 @@ def publish(run_id: str, out_dir: Path, bucket: str, runner=subprocess.run) -> l
                 ),
                 encoding="utf-8",
             )
-            results.append(put_once(bucket, head_key(manifest["head_sha256"]), pointer, runner))
+            recorded = put_once(bucket, head_key(manifest["head_sha256"]), pointer, runner)
+            if recorded["error"] == "PreconditionFailed":
+                # The name is made from the head hash: if it exists, this head was already recorded, for instance by an
+                # earlier attempt of the same run. The first pointer stands, which is the point of write once.
+                recorded["ok"], recorded["note"] = True, "already recorded"
+            results.append(recorded)
     return results
+
+
+def controls_plan() -> list[dict]:
+    """The expectation for the log of the negative controls, from the code and not from the artifact."""
+    import run_agent
+
+    return [{"action": action} for _, action in run_agent.CONTROLS]
 
 
 def publish_ok(results: list[dict]) -> bool:
@@ -164,6 +176,20 @@ def refusals(bucket: str, key: str, version_id: str, runner=subprocess.run) -> l
     return results
 
 
+def write_once_checks(bucket: str, keys: list[tuple[str, str]], runner=subprocess.run) -> list[dict]:
+    """The rule that a name is written once holds for every kind of object, not only the log."""
+    results = []
+    with tempfile.TemporaryDirectory() as tmp:
+        body = Path(tmp) / "body.txt"
+        body.write_text("an attempt to replace a record\n", encoding="utf-8")
+        for kind, key in keys:
+            code, _, err = aws(["put-object", "--bucket", bucket, "--key", key, "--body", str(body), "--if-none-match", "*"], runner)
+            got = "ACCEPTED" if code == 0 else (error_code(err) or "error")
+            results.append({"attempt": f"write the {kind} again", "expected": "PreconditionFailed", "got": got,
+                            "ok": got == "PreconditionFailed"})
+    return results
+
+
 def verify_store(run_id: str, bucket: str, plan: list[dict] | None, runner=subprocess.run) -> list[str]:
     """Read the logs back from the store and run the audit gate on them. Needs an identity that can read."""
     problems = []
@@ -180,7 +206,7 @@ def verify_store(run_id: str, bucket: str, plan: list[dict] | None, runner=subpr
             else:
                 records = audit_verify.load_records(files["audit.jsonl"])
                 manifest = json.loads(files["manifest.json"].read_text(encoding="utf-8"))
-                expect = plan if mode != "weakening" else None
+                expect = plan if mode != "weakening" else controls_plan()
                 problems += [f"{mode}: {p}" for p in audit_verify.verify(records, manifest, expect)]
                 code, _, _ = aws(["head-object", "--bucket", bucket, "--key", head_key(manifest["head_sha256"])], runner)
                 if code != 0:
@@ -191,7 +217,7 @@ def verify_store(run_id: str, bucket: str, plan: list[dict] | None, runner=subpr
 def summary(results: list[dict], checks: list[dict]) -> str:
     lines = ["### Audit store", "", "| Object | Written | Version | Checksum (SHA-256) |", "|---|---|---|---|"]
     for r in results:
-        state = "yes" if r["ok"] else f"NO ({r['error']})"
+        state = r.get("note") or ("yes" if r["ok"] else f"NO ({r['error']})")
         lines.append(f"| `{r['key']}` | {state} | `{(r['version_id'] or '-')[:12]}` | `{r['checksum'][:16]}...` |")
     if checks:
         lines += ["", "With the writer's own role, every attempt to change what was written must be refused:", "",
@@ -210,12 +236,18 @@ def main(argv: list[str] | None = None) -> int:
     pub.add_argument("--no-refusals", action="store_true")
     ver = sub.add_parser("verify")
     ver.add_argument("--run-id", required=True)
-    ver.add_argument("--plan", default="agent/plan.json")
+    ver.add_argument("--plan", default="agent/plan.json",
+                     help="the plan the logs of enforce and bypass are checked against; check out the commit "
+                          "recorded in the log (source.commit of its first record) to use the plan of that commit")
     args = parser.parse_args(argv)
     bucket = bucket_name()
 
     if args.command == "verify":
-        plan = json.loads(Path(args.plan).read_text(encoding="utf-8")) if Path(args.plan).exists() else None
+        if not Path(args.plan).exists():
+            print(f"::error title=Audit store::the plan {args.plan} was not found: run this from the root of the repository, "
+                  f"or name the plan with --plan. Without it the logs of enforce and bypass cannot be checked against it.")
+            return 1
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
         problems = verify_store(args.run_id, bucket, plan)
         for problem in problems:
             print(f"::error title=Audit store::{problem}")
@@ -228,6 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     first = next((r for r in results if r["ok"] and r["key"].endswith("/enforce/audit.jsonl")), None)
     if publish_ok(results) and not args.no_refusals and first and first["version_id"]:
         checks = refusals(bucket, first["key"], first["version_id"])
+        manifest = next(r for r in results if r["key"].endswith("/enforce/manifest.json"))
+        head = json.loads((Path(args.out) / "audit-enforce.manifest.json").read_text(encoding="utf-8"))["head_sha256"]
+        checks += write_once_checks(bucket, [("manifest", manifest["key"]), ("head pointer", head_key(head))])
     text = summary(results, checks)
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

@@ -86,13 +86,16 @@ destroyed; the README has the steps. Compliance mode would not be.
 
 ## What is proven
 
-Tested on the real bucket, from both sides, with the results recorded as the proof of the module:
+Tested on the real bucket, from both sides. The results are kept with the proof of the module (`docs/proof/`, in the last
+change of the module):
 
 - **As an administrator, the principal with the most power**: a write without the condition is refused; a first write
   with it is accepted and locked; a second write under the same name is refused, with and without the condition; the
   locked version cannot be deleted, and its retention cannot be shortened, without the bypass; the record reads back
   identical; and with the bypass permission an administrator *can* delete (the limit stated above).
-- **As the pipeline's writer role**: it cannot be tested from a laptop, because it can be assumed only through OIDC
+- **As the pipeline's writer role** (this shows the limits of the role, which holds no permission to read, delete or
+  change a retention, and which the bucket policy also denies; the lock itself is what the administrator tests above):
+  it cannot be tested from a laptop, because it can be assumed only through OIDC
   from `main`. So the job that publishes the records tests it: after writing, it tries, with that same role, to write the
   same name again, write outside its prefix, read the record back, delete the version, delete it with the bypass and
   shorten its retention, and every attempt must be refused with the right error. The job fails if the store accepts any.
@@ -103,6 +106,16 @@ On `main`, after every check has passed, the job `Publish the audit records` wri
 and a pointer named after the head hash, each only if it does not exist yet and with its checksum (the layout is in
 `agent/README.md`). It never declares a GitHub `environment:`, and a run on `main` is never cancelled half way. A
 person with a profile that can read verifies what the store holds with `publish_audit.py verify`.
+
+A pointer that already exists is not a failure when a job is retried: its name is made from the head hash, so the
+head was already recorded, and the first pointer stands. A log or a manifest that already exists is a failure,
+because those names are not made from their content. If a publication fails, the objects already written stay
+(that is the point), and running the workflow again on `main` publishes a new run under new names.
+
+One limit remains in who may write. The role is assumable by the subject `main` of this repository, which any
+workflow on `main` has, not only the one that publishes. Those workflows are the code that a review produced, but
+pinning the role to the file of the workflow (the `job_workflow_ref` claim of the token) would be a narrower trust,
+and is the next hardening.
 
 ## Consequences
 

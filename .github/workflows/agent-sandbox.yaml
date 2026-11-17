@@ -20,10 +20,13 @@ on:
 permissions:
   contents: read
 
-# A newer push cancels the run of a pull request that is out of date. A run on main is never cancelled: it may be
-# half way through writing the records to the store, and a log published in part is worse than one not published.
+# A newer push cancels the run of a pull request that is out of date. A run on main is never cancelled, and never
+# waits behind another: it may be half way through writing the records to the store, and a log published in part is
+# worse than one not published. A group holds one running and one pending run, and a newer pending run replaces the
+# older one, so a group shared by every run on main would drop the records of some commits. Each run on main gets
+# a group of its own, and since its objects have names of their own, runs do not interfere.
 concurrency:
-  group: agent-sandbox-${{ github.ref }}
+  group: agent-sandbox-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -51,7 +54,7 @@ jobs:
       - name: Tests of the enforcement point and of the audit gate
         run: python3 -m unittest discover -s agent -v
 
-      # A test of the tests: the audit code is weakened on purpose in 28 ways, and the tests must notice each one.
+      # A test of the tests: the audit code is weakened on purpose in 31 ways, and the tests must notice each one.
       - name: The tests catch a weakened audit gate
         run: python3 agent/mutation_check.py
 
@@ -84,9 +87,11 @@ jobs:
         if: always()
         run: |
           status=0
+          # The expectation for the controls comes from the code, not from a file that travelled with the log.
+          python3 agent/controls_plan.py > "${RUNNER_TEMP}/plan-weakening.json"
           python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json || status=1
           python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json || status=1
-          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect agent/out/plan-weakening.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect "${RUNNER_TEMP}/plan-weakening.json" || status=1
           exit "${status}"
 
       # A gate that has never refused anything proves nothing. The real log of this run is damaged four ways, and each
@@ -137,9 +142,10 @@ jobs:
       - name: Audit gate on what was fetched
         run: |
           status=0
+          python3 agent/controls_plan.py > "${RUNNER_TEMP}/plan-weakening.json"
           python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json || status=1
           python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json || status=1
-          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect agent/out/plan-weakening.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect "${RUNNER_TEMP}/plan-weakening.json" || status=1
           exit "${status}"
 
       # The role that can only write, and only from main.
