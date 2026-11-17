@@ -68,6 +68,21 @@ jobs:
         if: always()
         run: python3 agent/run_agent.py --mode weakening
 
+      # The audit gate: a log that is incomplete, inconsistent or altered is refused. It reads the files from disk in a
+      # separate process, so it does not rely on anything the run itself concluded.
+      - name: Audit gate
+        if: always()
+        run: |
+          python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json
+          python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json
+          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json
+
+      # A gate that has never refused anything proves nothing. The real log of this run is damaged four ways, and each
+      # must be refused.
+      - name: The audit gate can fail
+        if: always()
+        run: python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json --tamper-test
+
       - name: Keep the records
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
