@@ -14,8 +14,9 @@ Two layers, and this script exercises both on purpose.
 The input to the policy is built here, by the platform, not by the agent. That is the trust boundary described in
 policy/README.md: the agent proposes actions, it never says who approved them.
 
-Each action runs in its own container, which is thrown away afterwards. Every action leaves one record. The
-records are a first step towards the audit record; they are kept as a build artifact.
+Each action runs in its own container, which is thrown away afterwards. Every action the agent proposes, run or
+not, leaves one record in an audit log whose records are chained by hashes (agent/audit.py). The log is checked
+at once by the audit gate (agent/audit_verify.py) and kept as a build artifact with its manifest.
 
 Standard library only. The policy engine (opa) must be on the PATH, or named in OPA_BIN.
 """
@@ -32,6 +33,9 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import audit
+import audit_verify
 
 AGENT_ID = "agent-sandbox-01"
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +89,120 @@ def sandbox_mounts(weaken: str | None = None) -> list[str]:
 
 
 SANDBOX_FLAGS = sandbox_flags()
+
+
+def limits_description(weaken: str | None = None) -> list[str]:
+    """The limits as they go in a record: the flags, and the mounts with paths that do not depend on the machine."""
+    mounts = ["-v", "agent/synthetic:/data:ro"]
+    if weaken == "data":
+        mounts += ["-v", "agent/regulated-standin:/regulated:ro"]
+    return sandbox_flags(weaken) + mounts
+
+
+def flags_sha256(weaken: str | None = None) -> str:
+    return audit.sha256_hex(" ".join(limits_description(weaken)).encode("utf-8"))
+
+
+def engine_version() -> str:
+    try:
+        done = subprocess.run([OPA, "version"], capture_output=True, text=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return "opa (unavailable)"
+    match = re.search(r"Version:\s*(\S+)", done.stdout)
+    return f"opa {match.group(1)}" if match else "opa (unknown version)"
+
+
+def image_id() -> str | None:
+    try:
+        done = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", IMAGE],
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None
+
+
+def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None) -> audit.AuditLog:
+    env = os.environ
+    if env.get("GITHUB_RUN_ID"):
+        run_id = f"{env['GITHUB_RUN_ID']}-{env.get('GITHUB_RUN_ATTEMPT', '1')}-{mode}"
+    else:
+        run_id = f"local-{int(time.time())}-{mode}"
+    log = audit.AuditLog(run_id, mode, sink=(out / f"audit-{mode}.jsonl") if out else None)
+    log.append(
+        "run_started",
+        agent={"id": AGENT_ID, "kind": "scripted"},
+        principal=audit.principal_from_env(),
+        source=audit.source_from_env(),
+        plan_sha256=audit.sha256_hex(plan_bytes),
+        policy_sha256=sha,
+        policy_engine=engine,
+        sandbox={"image_id": image_id(), "limits": limits_description(), "flags_sha256": flags_sha256()},
+    )
+    return log
+
+
+def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: str | None = None) -> dict:
+    """One action, as the audit record says it: the request, the rules that judged it, the approval, the result."""
+    request = {"action": rec["action"], "tool": rec.get("tool")}
+    policy = rec["policy"] or {
+        "effect": "bypassed",
+        "class": None,
+        "reason": "the policy is switched off in this mode, to test the sandbox on its own",
+    }
+    policy = {**policy, "policy_sha256": sha, "engine": engine}
+    gated = policy["effect"] == "gate"
+    approval = {
+        "required": gated,
+        "status": "pending" if gated else "not_required",
+        "approver": None,
+        "decided_at": None,
+        "source": None,
+        "evidence": None,
+    }
+    execution = {
+        "executed": rec["executed"],
+        "outcome": rec["outcome"],
+        "detail": rec["detail"],
+        "duration_ms": rec["ms"],
+        "flags_sha256": flags_sha256(weaken) if rec["executed"] else None,
+    }
+    return log.append(
+        "action",
+        agent={"id": AGENT_ID, "kind": "scripted"},
+        request=request,
+        request_sha256=audit.sha256_hex(audit.canonical(request)),
+        policy=policy,
+        approval=approval,
+        execution=execution,
+    )
+
+
+def finish_log(log: audit.AuditLog) -> None:
+    actions = [r for r in log.records if r["event"] == "action"]
+    effects = [r["policy"]["effect"] for r in actions]
+    log.append(
+        "run_finished",
+        summary={
+            "actions": len(actions),
+            "executed": sum(bool(r["execution"]["executed"]) for r in actions),
+            "allowed": effects.count("allow"),
+            "gated": effects.count("gate"),
+            "denied": effects.count("deny"),
+            "bypassed": effects.count("bypassed"),
+        },
+    )
+
+
+def write_audit(out: Path, log: audit.AuditLog) -> str:
+    """The log is already on disk if it had a sink; the manifest is written once the run is finished."""
+    out.mkdir(parents=True, exist_ok=True)
+    if log.sink is None:
+        (out / f"audit-{log.mode}.jsonl").write_text(log.text(), encoding="utf-8")
+    manifest = log.manifest()
+    (out / f"audit-{log.mode}.manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return f"\nAudit log: {manifest['records']} records, head `{manifest['head_sha256']}`.\n"
 
 
 def utc_now() -> str:
@@ -242,7 +360,9 @@ def summary(mode: str, records: list[dict], problems: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_controls(out: Path, sha: str) -> int:
+def run_controls(out: Path, sha: str, engine: str) -> int:
+    plan = [{"action": action} for _, action in CONTROLS]
+    log = start_log("weakening", json.dumps(plan).encode("utf-8"), sha, engine, out)
     records = []
     for weaken, action in CONTROLS:
         item = {"action": action, "kind": "attempt"}
@@ -250,10 +370,12 @@ def run_controls(out: Path, sha: str) -> int:
         record["weakened"] = weaken
         record["policy_sha256"] = sha
         records.append(record)
-    problems = judge_controls(records)
+        audit_action(log, record, sha, engine, weaken)
+    finish_log(log)
+    problems = judge_controls(records) + audit_verify.verify(log.records, log.manifest(), plan)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "agent-run-weakening.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
-    text = controls_summary(records, problems)
+    (out / "plan-weakening.json").write_text(json.dumps(plan), encoding="utf-8")
+    text = controls_summary(records, problems) + write_audit(out, log)
     (out / "summary-weakening.md").write_text(text, encoding="utf-8")
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -269,26 +391,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=str(ROOT / "agent" / "out"))
     args = parser.parse_args(argv)
 
-    sha = policy_sha()
+    sha, engine = policy_sha(), engine_version()
     if args.mode == "weakening":
-        return run_controls(Path(args.out), sha)
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        return run_controls(Path(args.out), sha, engine)
+    plan_bytes = Path(args.plan).read_bytes()
+    plan = json.loads(plan_bytes.decode("utf-8"))
+    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out))
     records, everything = [], ""
     for item in plan:
         record, text = evaluate(item, args.mode)
         record["policy_sha256"] = sha
         records.append(record)
+        audit_action(log, record, sha, engine)
         everything += text
         if record["kind"] == "attempt" and args.mode == "bypass" and record["outcome"] in ("blocked", "killed"):
             print(f"::warning title=Escape attempt blocked::{record['action']}: {record['detail']}")
         elif record["kind"] != "legit" and args.mode == "enforce" and not record["executed"]:
             print(f"::notice title=Policy stopped an action::{record['action']}: {record['detail']}")
 
-    problems = judge(args.mode, records, canary() in everything or canary() in json.dumps(records))
+    finish_log(log)
+    leaked = canary() in everything or canary() in json.dumps(records) or canary() in log.text()
+    problems = judge(args.mode, records, leaked) + audit_verify.verify(log.records, log.manifest(), plan)
     out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / f"agent-run-{args.mode}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
-    text = summary(args.mode, records, problems)
+    text = summary(args.mode, records, problems) + write_audit(out, log)
     (out / f"summary-{args.mode}.md").write_text(text, encoding="utf-8")
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

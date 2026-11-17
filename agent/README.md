@@ -11,7 +11,8 @@ The agent is a script, not a language model: it makes the proof repeatable. It "
 | [`run_agent.py`](run_agent.py) | the enforcement point: asks the policy, starts the sandbox, judges the result |
 | [`synthetic/`](synthetic/) | the only data the sandbox gets (invented, read-only) |
 | [`regulated-standin/`](regulated-standin/) | a file that stands in for regulated data. It is never mounted and is not in the image. It carries a canary |
-| [`test_run_agent.py`](test_run_agent.py) | tests of the enforcement point (no Docker needed) |
+| [`audit.py`](audit.py), [`audit_verify.py`](audit_verify.py) | the audit record (a hash chain) and the audit gate that refuses a log that is incomplete, inconsistent or altered |
+| [`test_run_agent.py`](test_run_agent.py), [`test_audit.py`](test_audit.py) | tests of the enforcement point and of the audit gate (no Docker needed) |
 | [`../.github/workflows/agent-sandbox.yaml`](../.github/workflows/agent-sandbox.yaml) | runs all of this on every pull request |
 
 ## Two layers
@@ -44,6 +45,26 @@ This is also an honest account of what holds what. Privileged operations are ref
 runs as an unprivileged user; dropping the capabilities and `no-new-privileges` are defence in depth, and the
 control removes all three together, so it does not tell them apart.
 
+## The audit log
+
+Every action the agent proposes, run or not, leaves one record: who, what, under which rules, who approved,
+what happened, in which version of the code. The records are chained by hashes, so changing, removing or
+reordering one is detected. The shape, and why, are in [ADR 0005](../docs/adr/0005-audit-record.md).
+
+Each run writes `audit-<mode>.jsonl` and `audit-<mode>.manifest.json` (the head hash and the number of
+records), which are kept as the `agent-run` artifact. The **audit gate** then reads them from disk and refuses a
+log that is incomplete, inconsistent or altered. A second step damages the run's own log in four ways and
+requires each to be refused, because a gate that has never refused anything proves nothing.
+
+A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate in 21 ways and requires the
+tests to notice each one; it runs in CI.
+
+To check a log by hand:
+
+```
+python3 agent/audit_verify.py audit-enforce.jsonl --manifest audit-enforce.manifest.json --expect agent/plan.json
+```
+
 ## What makes the run fail
 
 - An attempt works (an "escape"), or does not run.
@@ -63,4 +84,6 @@ use a stand-in for the container and are safe anywhere.
 
 - A container shares its host's kernel. The sandbox holds synthetic data only for that reason.
 - The agent is a script. Prompt injection and the other risks that need a language model are not tested here.
-- The records in the `agent-run` artifact are not yet immutable and carry no approval; that is the next change.
+- The log is tamper-evident, not yet immutable: someone who can rewrite the whole log can recompute the chain, and
+  only the head hash (kept apart) catches it. Where the head is kept is the next change.
+- No approval path exists yet, so every gated action is recorded as pending.
