@@ -13,14 +13,18 @@ name: Agent sandbox
 # can be a required check.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer push cancels the run of a pull request that is out of date. A run on main is never cancelled: it may be
+# half way through writing the records to the store, and a log published in part is worse than one not published.
 concurrency:
   group: agent-sandbox-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   escape-test:
@@ -47,7 +51,7 @@ jobs:
       - name: Tests of the enforcement point and of the audit gate
         run: python3 -m unittest discover -s agent -v
 
-      # A test of the tests: the audit gate is weakened on purpose in 21 ways, and the tests must notice each one.
+      # A test of the tests: the audit code is weakened on purpose in 28 ways, and the tests must notice each one.
       - name: The tests catch a weakened audit gate
         run: python3 agent/mutation_check.py
 
@@ -99,3 +103,52 @@ jobs:
           path: agent/out/
           retention-days: 90
           if-no-files-found: warn
+
+  # Publishes the logs to the audit store, where the pipeline that wrote them cannot change them (ADR 0006).
+  #
+  # - Only on main, and only after every check above has passed. A pull request, whose workflow its author can
+  #   change, never writes to the store; the role it would need cannot be assumed from anywhere else.
+  # - No `environment:` here: it would change the subject of the token and stop matching the role.
+  # - The role can only write. The script then tries, with that same role, to change what it wrote, and every attempt
+  #   must be refused.
+  publish-audit:
+    name: Publish the audit records
+    needs: escape-test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Fetch the records of this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-run
+          path: agent/out
+
+      # The records crossed from one job to another, so the gate is run again on what arrived, before anything is written.
+      - name: Audit gate on what was fetched
+        run: |
+          status=0
+          python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect agent/out/plan-weakening.json || status=1
+          exit "${status}"
+
+      # The role that can only write, and only from main.
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/pe-lab-gha-audit-writer
+          aws-region: us-east-1
+
+      - name: Publish, then try to change what was published
+        run: |
+          aws --version
+          python3 agent/publish_audit.py publish --run-id "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

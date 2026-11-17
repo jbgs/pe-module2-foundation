@@ -58,6 +58,18 @@ MUTANTS = [
         "if False:",
     ),
     ("audit.py", "records are no longer written to disk as they happen", "if self.sink:\n            with open(", "if False:\n            with open("),
+    ("publish_audit.py", "a write is no longer conditional (it could replace a record)", '            "--if-none-match", "*",\n', ""),
+    ("publish_audit.py", "the checksum is not sent with the write", '            "--checksum-sha256", checksum,\n', ""),
+    ("publish_audit.py", "a failed write is not reported", 'return all(r["ok"] for r in results)', "return True"),
+    ("publish_audit.py", "the head pointer is not written", '            results.append(put_once(bucket, head_key(manifest["head_sha256"]), pointer, runner))\n', ""),
+    ("publish_audit.py", "an accepted attempt to change a record counts as refused", "            ok = got == expected\n", "            ok = True\n"),
+    (
+        "publish_audit.py",
+        "reading back does not run the audit gate",
+        'problems += [f"{mode}: {p}" for p in audit_verify.verify(records, manifest, expect)]',
+        "problems += []",
+    ),
+    ("publish_audit.py", "a missing head pointer is not reported", 'if code != 0:\n                    problems.append(f"{mode}: the head pointer is missing', 'if False:\n                    problems.append(f"{mode}: the head pointer is missing'),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]
 

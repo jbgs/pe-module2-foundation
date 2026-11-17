@@ -86,15 +86,28 @@ destroyed; the README has the steps. Compliance mode would not be.
 
 ## What is proven
 
-Applied, the store is tested from both sides, and the result is recorded in `docs/proof/`: that a second write under
-the same name is refused, that a write without the condition is refused, that a locked version cannot be deleted
-without the bypass, and that the writer role cannot do anything but write. The test of the writer runs from the
-pipeline, because that is the identity that matters.
+Tested on the real bucket, from both sides, with the results recorded as the proof of the module:
+
+- **As an administrator, the principal with the most power**: a write without the condition is refused; a first write
+  with it is accepted and locked; a second write under the same name is refused, with and without the condition; the
+  locked version cannot be deleted, and its retention cannot be shortened, without the bypass; the record reads back
+  identical; and with the bypass permission an administrator *can* delete (the limit stated above).
+- **As the pipeline's writer role**: it cannot be tested from a laptop, because it can be assumed only through OIDC
+  from `main`. So the job that publishes the records tests it: after writing, it tries, with that same role, to write the
+  same name again, write outside its prefix, read the record back, delete the version, delete it with the bypass and
+  shorten its retention, and every attempt must be refused with the right error. The job fails if the store accepts any.
+
+## How the records get there
+
+On `main`, after every check has passed, the job `Publish the audit records` writes, for each log, the log, its manifest
+and a pointer named after the head hash, each only if it does not exist yet and with its checksum (the layout is in
+`agent/README.md`). It never declares a GitHub `environment:`, and a run on `main` is never cancelled half way. A
+person with a profile that can read verifies what the store holds with `publish_audit.py verify`.
 
 ## Consequences
 
-- The head hash of every log can be kept in the store, apart from the pipeline that produced it. That is the
-  change that follows this one.
+- The head hash of every log is kept in the store, apart from the pipeline that produced it, which closes what
+  ADR 0005 left open.
 - A copy to this bucket through a bucket policy that enforces conditional writes would be refused, and so would a
   multipart upload. The records are small and written with a single request.
 - The check `Terraform infra/audit` validates the code in every pull request. Nothing is applied by CI.
