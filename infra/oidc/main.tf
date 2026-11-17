@@ -322,6 +322,27 @@ data "aws_iam_policy_document" "apply" {
     resources = ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}-*"]
   }
 
+  # The roles of the pipeline itself are not the apply role's to change. The statement above reaches every role
+  # with the lab prefix, which includes this role and the one that writes the audit records: without this, a run
+  # on main could attach a policy to itself and become an administrator, or loosen who may assume the writer.
+  # An explicit deny wins over any allow.
+  statement {
+    sid    = "DenyChangesToThePipelineOwnRoles"
+    effect = "Deny"
+    actions = [
+      "iam:DeleteRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:TagRole",
+      "iam:UntagRole",
+    ]
+    resources = ["arn:aws:iam::${local.account_id}:role/${var.name_prefix}-gha-*"]
+  }
+
   statement {
     sid       = "IamPassRoleToEcsTasks"
     actions   = ["iam:PassRole"]

@@ -73,7 +73,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [infra/bootstrap, infra/oidc, infra/envs/dev]
+        stack: [infra/bootstrap, infra/oidc, infra/envs/dev, infra/audit]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
