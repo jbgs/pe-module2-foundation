@@ -51,14 +51,8 @@ def build(mode="enforce", items=None):
     return log
 
 
-def rechain(records):
-    """What a forger who can rewrite the whole log does: recompute every hash from the start."""
-    prev = audit.genesis(records[0]["run_id"])
-    for index, rec in enumerate(records):
-        rec["seq"] = index
-        rec["chain"] = {"prev": prev}
-        rec["chain"]["sha256"] = audit.record_hash(rec)
-        prev = rec["chain"]["sha256"]
+# What a forger who can rewrite the whole log does: recompute every hash from the start.
+rechain = audit.rechain
 
 
 class Good(unittest.TestCase):
@@ -165,6 +159,28 @@ class Tampering(unittest.TestCase):
         problems = self.refused(self.records, manifest=True)
         self.assertTrue(any("head hash does not match the manifest" in p for p in problems))
 
+    def test_a_record_removed_and_the_chain_recomputed_but_not_renumbered(self):
+        # The hashes are all consistent; only the numbering shows that a record is missing.
+        del self.records[3]
+        prev = audit.genesis(self.records[0]["run_id"])
+        for rec in self.records:
+            rec["chain"] = {"prev": prev}
+            rec["chain"]["sha256"] = audit.record_hash(rec)
+            prev = rec["chain"]["sha256"]
+        problems = audit_verify.verify(self.records, None, PLAN)
+        self.assertTrue(any("removed, added or moved" in p for p in problems))
+
+    def test_a_manifest_with_the_right_head_but_the_wrong_count(self):
+        forged = dict(self.manifest, records=self.manifest["records"] + 1)
+        problems = audit_verify.verify(self.records, forged, PLAN)
+        self.assertTrue(any("manifest counts" in p for p in problems))
+
+    def test_a_record_of_another_run_inside_a_consistent_chain(self):
+        self.records[2]["run_id"] = "another-run"
+        audit.rechain(self.records)
+        problems = audit_verify.verify(self.records, None, PLAN)
+        self.assertTrue(any("another run or mode" in p for p in problems))
+
     def test_an_empty_log_is_refused(self):
         self.assertTrue(audit_verify.verify([], None, PLAN))
 
@@ -218,6 +234,18 @@ class Consistency(unittest.TestCase):
         rec["approval"] = {"required": True, "status": "approved", "approver": run_agent.AGENT_ID,
                            "decided_at": "2026-11-17T09:00:00Z", "source": "x", "evidence": "y"}
         self.assertTrue(any("without an approval" in p for p in self.problems()))
+
+    def test_an_approval_that_was_not_granted_does_not_unlock_a_human_gated_action(self):
+        for status in ("pending", "denied"):
+            with self.subTest(status=status):
+                self.records = copy.deepcopy(build("enforce").records)
+                rec = self.action("modify_policy")
+                rec["policy"]["effect"] = "allow"
+                rec["execution"]["executed"] = True
+                rec["execution"]["flags_sha256"] = "b" * 64
+                rec["approval"] = {"required": True, "status": status, "approver": "jbgs",
+                                   "decided_at": "2026-11-17T09:00:00Z", "source": "x", "evidence": "y"}
+                self.assertTrue(any("without an approval" in p for p in self.problems()))
 
     def test_a_valid_human_approval_passes(self):
         rec = self.action("modify_policy")
@@ -273,6 +301,104 @@ class Consistency(unittest.TestCase):
         finished = next(r for r in self.records if r["event"] == "run_finished")
         finished["summary"].update({"actions": 6, "denied": 2})
         self.assertTrue(any("not the actions planned" in p for p in self.problems()))
+
+
+class Streaming(unittest.TestCase):
+    """A run that crashes half way must leave the records of what it already did."""
+
+    def test_every_record_is_on_disk_the_moment_it_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = Path(tmp) / "audit.jsonl"
+            log = audit.AuditLog("run-1", "enforce", sink=sink)
+            log.append("run_started", x=1)
+            self.assertEqual(len(sink.read_text(encoding="utf-8").splitlines()), 1)
+            log.append("action", x=2)
+            self.assertEqual(len(sink.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_what_is_on_disk_is_what_the_log_holds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sink = Path(tmp) / "audit.jsonl"
+            log = run_agent.start_log("enforce", json.dumps(PLAN).encode(), SHA, ENGINE, Path(tmp))
+            for item in PLAN:
+                record, _ = run_agent.evaluate(item, "enforce", decide_fn=fake_policy, run_fn=fake_run)
+                run_agent.audit_action(log, record, SHA, ENGINE)
+            run_agent.finish_log(log)
+            on_disk = audit_verify.load_records(Path(tmp) / "audit-enforce.jsonl")
+            self.assertEqual(on_disk, log.records)
+            self.assertEqual(audit_verify.verify(on_disk, log.manifest(), PLAN), [])
+            self.assertEqual(sink.name, "audit.jsonl")
+
+    def test_a_run_that_crashed_leaves_a_log_the_gate_refuses_as_cut_short(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = run_agent.start_log("enforce", json.dumps(PLAN).encode(), SHA, ENGINE, Path(tmp))
+            record, _ = run_agent.evaluate(PLAN[0], "enforce", decide_fn=fake_policy, run_fn=fake_run)
+            run_agent.audit_action(log, record, SHA, ENGINE)
+            # the process dies here: no run_finished, no manifest
+            on_disk = audit_verify.load_records(Path(tmp) / "audit-enforce.jsonl")
+            self.assertEqual(len(on_disk), 2)
+            self.assertEqual(on_disk[1]["request"]["action"], "read_synthetic_data")
+            self.assertTrue(any("cut short" in p for p in audit_verify.verify(on_disk, None, PLAN)))
+
+
+class Malformed(unittest.TestCase):
+    """Input that is not a log at all is refused with a reason, not with a crash."""
+
+    def good(self):
+        return copy.deepcopy(build("enforce").records)
+
+    def test_a_line_that_is_not_an_object(self):
+        recs = self.good()
+        recs[2] = ["not", "an", "object"]
+        self.assertTrue(any("not an object" in p for p in audit_verify.verify(recs, None, PLAN)))
+
+    def test_a_line_that_is_a_string(self):
+        recs = self.good()
+        recs[1] = "text"
+        self.assertTrue(audit_verify.verify(recs, None, PLAN))
+
+    def test_a_chain_that_is_not_an_object(self):
+        recs = self.good()
+        recs[1]["chain"] = "abc"
+        self.assertTrue(any("chain field is malformed" in p for p in audit_verify.verify(recs, None, PLAN)))
+
+    def test_a_chain_without_a_hash(self):
+        recs = self.good()
+        del recs[1]["chain"]["sha256"]
+        self.assertTrue(any("chain field is malformed" in p for p in audit_verify.verify(recs, None, PLAN)))
+
+    def test_a_request_that_is_a_list(self):
+        recs = self.good()
+        next(r for r in recs if r["event"] == "action")["request"] = ["read_synthetic_data"]
+        self.assertTrue(any("request is not an object" in p for p in audit_verify.verify(recs, None, PLAN)))
+
+    def test_an_unknown_event(self):
+        recs = self.good()
+        recs[1]["event"] = "something_else"
+        self.assertTrue(audit_verify.verify(recs, None, PLAN))
+
+    def test_a_tamper_test_does_not_crash_when_a_detail_is_empty(self):
+        recs = self.good()
+        next(r for r in recs if r["event"] == "action")["execution"]["detail"] = None
+        audit.rechain(recs)
+        manifest = {"run_id": recs[0]["run_id"], "records": len(recs), "head_sha256": recs[-1]["chain"]["sha256"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path, mpath = Path(tmp) / "a.jsonl", Path(tmp) / "m.json"
+            path.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+            mpath.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(audit_verify.main([str(path), "--manifest", str(mpath), "--tamper-test"]), 0)
+
+    def test_the_tamper_test_refuses_to_run_without_a_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.jsonl"
+            path.write_text(build("enforce").text(), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                audit_verify.main([str(path), "--tamper-test"])
+
+    def test_the_command_reports_instead_of_crashing_on_a_file_of_garbage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.jsonl"
+            path.write_text('[1, 2]\n"x"\n{"a": 1}\nnot json\n', encoding="utf-8")
+            self.assertEqual(audit_verify.main([str(path)]), 1)
 
 
 class Command(unittest.TestCase):

@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 SCHEMA = "agent-audit/1"
 MANIFEST_SCHEMA = "agent-audit-manifest/1"
@@ -81,7 +82,10 @@ def rechain(records: list[dict]) -> None:
 class AuditLog:
     """Builds a log, one record at a time, chaining each to the one before."""
 
-    def __init__(self, run_id: str, mode: str, now=utc_now):
+    def __init__(self, run_id: str, mode: str, now=utc_now, sink=None):
+        """With a sink (a file), every record is written and flushed to disk the moment it exists. A run that
+        crashes half way then leaves the records of what it already did, and a log with no `run_finished`,
+        which the gate refuses as cut short."""
         if mode not in MODES:
             raise ValueError(f"unknown mode: {mode}")
         self.run_id = run_id
@@ -89,6 +93,10 @@ class AuditLog:
         self._now = now
         self._prev = genesis(run_id)
         self.records: list[dict] = []
+        self.sink = Path(sink) if sink else None
+        if self.sink:
+            self.sink.parent.mkdir(parents=True, exist_ok=True)
+            self.sink.write_text("", encoding="utf-8")
 
     def append(self, event: str, **fields) -> dict:
         record = {
@@ -104,6 +112,11 @@ class AuditLog:
         record["chain"]["sha256"] = record_hash(record)
         self._prev = record["chain"]["sha256"]
         self.records.append(record)
+        if self.sink:
+            with open(self.sink, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         return record
 
     def text(self) -> str:

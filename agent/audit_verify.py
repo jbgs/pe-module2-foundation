@@ -113,6 +113,9 @@ def verify(records: list[dict], manifest: dict | None = None, plan: list[dict] |
 
     # structure
     for index, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            problems.append(f"record {index} is not an object")
+            continue
         if "_unreadable_line" in rec:
             problems.append(f"line {rec['_unreadable_line']} is not readable")
             continue
@@ -121,6 +124,13 @@ def verify(records: list[dict], manifest: dict | None = None, plan: list[dict] |
             absent = missing(rec, REQUIRED.get(rec["event"], ("event is not one of the known ones",)))
         if absent:
             problems.append(f"record {index}: lacks {', '.join(absent)}")
+            continue
+        chain = rec["chain"]
+        if not isinstance(chain, dict) or not all(isinstance(chain.get(k), str) for k in ("prev", "sha256")):
+            problems.append(f"record {index}: the chain field is malformed")
+        for key in ("agent", "principal", "source", "sandbox", "request", "policy", "approval", "execution", "summary"):
+            if key in rec and not isinstance(rec[key], dict):
+                problems.append(f"record {index}: {key} is not an object")
     if problems:
         return problems  # nothing below is safe to read from a log of this shape
 
@@ -202,7 +212,7 @@ def tamper_test(records: list[dict], manifest: dict | None, plan: list[dict] | N
     def altered():
         recs = copy.deepcopy(records)
         target = next(r for r in recs if r["event"] == "action")
-        target["execution"]["detail"] += " (edited)"
+        target["execution"]["detail"] = (target["execution"]["detail"] or "") + " (edited)"
         return recs
 
     def removed_in_the_middle():
@@ -246,11 +256,17 @@ def main(argv: list[str] | None = None) -> int:
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8")) if args.manifest else None
     plan = json.loads(Path(args.expect).read_text(encoding="utf-8")) if args.expect else None
     if args.tamper_test:
+        if manifest is None:
+            parser.error("--tamper-test needs --manifest: without the head hash, a log rewritten from start to end "
+                         "cannot be told from a good one")
         if verify(records, manifest, plan):
             print("the log given to the tamper test is not good to begin with")
             return 1
         return tamper_test(records, manifest, plan)
-    problems = verify(records, manifest, plan)
+    try:
+        problems = verify(records, manifest, plan)
+    except Exception as exc:  # noqa: BLE001 - a log that breaks the gate is a log the gate refuses
+        problems = [f"the log could not be checked ({type(exc).__name__}: {exc}); it is malformed"]
     if problems:
         for problem in problems:
             print(f"::error title=Audit gate::{problem}")

@@ -56,8 +56,14 @@ reordering a record breaks every hash after it. That makes the log **tamper-evid
 It does not make it immutable. Someone who can rewrite the whole log can recompute the whole chain, and the tests
 show it: a complete rewrite passes the chain check and is caught only by the **head hash** (the hash of the last
 record), which is kept in a manifest and printed in the run's summary. So the strength of the trail is exactly the
-strength of the place where the head is kept. Today that is the build artifact and the run summary, which the agent
-cannot write. The next change moves it to a store that no one in the pipeline can rewrite or delete.
+strength of the place where the head is kept. Today that is the build artifact and the run summary: out of reach of the
+agent (it is in the container, and never touches them), but not out of reach of the pipeline itself, which writes
+both. So the manifest protects against editing after the fact, not against a compromised pipeline. The next change
+moves the head to a store that no one in the pipeline can rewrite or delete.
+
+Every record is also written to disk the moment it exists. A run that crashes half way leaves the records of what
+it already did and a log with no `run_finished`, which the gate refuses as cut short; the alternative, writing the
+log at the end, would lose exactly the actions that matter most.
 
 ### What the audit gate refuses
 
@@ -73,9 +79,19 @@ cannot write. The next change moves it to a store that no one in the pipeline ca
 - the number of records or the head hash does not match the manifest;
 - an action of the plan is missing, unplanned, repeated or out of order.
 
-A gate that has never refused anything proves nothing, so it is tested three ways: 37 unit tests (most of them damage a good log
-and require the gate to notice); a mutation test in which the verifier itself was weakened in 17 ways, each caught
-by the tests; and, in CI, a step that damages the run's own log in four ways and requires each to be refused.
+A gate that has never refused anything proves nothing, so it is tested three ways: 53 unit tests, most of which damage
+a good log and require the gate to notice; a **test of the tests**, `agent/mutation_check.py`, which weakens the
+verifier and the log writer in 21 ways and requires the tests to notice each (it runs in CI, so the claim is
+reproducible); and, in CI, a step that damages the run's own log in four ways and requires each to be refused.
+
+The mutation check found, when it was first run, that four rules were covered only indirectly: because every record
+is inside the hash chain, the numbering, the manifest's count, the approval status and the run identifier cannot be
+wrong in a log that was merely edited; they matter for a log that was forged consistently. Each now has its own test.
+
+What the consistency checks can and cannot do: they catch a bug, and a careless alteration. They cannot, by
+themselves, catch a forger who rewrites everything consistently, because they judge the log against itself (for
+example the approver is compared with the agent id that the log carries). Authenticity comes from where the log is
+written and where its head is kept, not from these checks.
 
 ## What is not true yet
 

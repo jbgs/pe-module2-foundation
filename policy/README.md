@@ -73,6 +73,7 @@ add nothing, so there is none. There is also one approver, `jbgs`: adding anothe
 They were: an agent that approves its own action; an approver outside the list; a negative approval that passes;
 forbidden actions that stop being classified; a gated action that becomes autonomous; an out-of-scope tool that is
 never denied; a tool-scope check that always passes (in two different ways); and a default that allows.
+[`mutation_check.py`](mutation_check.py) reproduces this (it runs in the CI job `Policy tests`).
 Two of them were not caught at first, because the tests checked only the effect of a decision and not its class
 or reason; they do now. Two more were added after the review of this change, for the class of a denied tool and
 the class of an unlisted action.

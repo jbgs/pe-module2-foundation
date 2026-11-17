@@ -44,8 +44,12 @@ jobs:
           install -m 0755 opa "${HOME}/bin/opa"
           echo "${HOME}/bin" >> "${GITHUB_PATH}"
 
-      - name: Tests of the enforcement point
+      - name: Tests of the enforcement point and of the audit gate
         run: python3 -m unittest discover -s agent -v
+
+      # A test of the tests: the audit gate is weakened on purpose in 21 ways, and the tests must notice each one.
+      - name: The tests catch a weakened audit gate
+        run: python3 agent/mutation_check.py
 
       - name: Build the sandbox image
         run: docker build -t agent-sandbox:ci agent/sandbox
@@ -69,13 +73,17 @@ jobs:
         run: python3 agent/run_agent.py --mode weakening
 
       # The audit gate: a log that is incomplete, inconsistent or altered is refused. It reads the files from disk in a
-      # separate process, so it does not rely on anything the run itself concluded.
+      # separate process. The manifest is written by the same run, so it protects against editing after the fact and
+      # not against the pipeline itself; the store that closes that is the next change. All three logs are checked
+      # even if one is refused, so the diagnosis is complete.
       - name: Audit gate
         if: always()
         run: |
-          python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json
-          python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json
-          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json
+          status=0
+          python3 agent/audit_verify.py agent/out/audit-enforce.jsonl --manifest agent/out/audit-enforce.manifest.json --expect agent/plan.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-bypass.jsonl --manifest agent/out/audit-bypass.manifest.json --expect agent/plan.json || status=1
+          python3 agent/audit_verify.py agent/out/audit-weakening.jsonl --manifest agent/out/audit-weakening.manifest.json --expect agent/out/plan-weakening.json || status=1
+          exit "${status}"
 
       # A gate that has never refused anything proves nothing. The real log of this run is damaged four ways, and each
       # must be refused.

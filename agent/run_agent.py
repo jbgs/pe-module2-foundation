@@ -123,13 +123,13 @@ def image_id() -> str | None:
     return done.stdout.strip() or None
 
 
-def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str) -> audit.AuditLog:
+def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None) -> audit.AuditLog:
     env = os.environ
     if env.get("GITHUB_RUN_ID"):
         run_id = f"{env['GITHUB_RUN_ID']}-{env.get('GITHUB_RUN_ATTEMPT', '1')}-{mode}"
     else:
         run_id = f"local-{int(time.time())}-{mode}"
-    log = audit.AuditLog(run_id, mode)
+    log = audit.AuditLog(run_id, mode, sink=(out / f"audit-{mode}.jsonl") if out else None)
     log.append(
         "run_started",
         agent={"id": AGENT_ID, "kind": "scripted"},
@@ -196,8 +196,10 @@ def finish_log(log: audit.AuditLog) -> None:
 
 
 def write_audit(out: Path, log: audit.AuditLog) -> str:
+    """The log is already on disk if it had a sink; the manifest is written once the run is finished."""
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"audit-{log.mode}.jsonl").write_text(log.text(), encoding="utf-8")
+    if log.sink is None:
+        (out / f"audit-{log.mode}.jsonl").write_text(log.text(), encoding="utf-8")
     manifest = log.manifest()
     (out / f"audit-{log.mode}.manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return f"\nAudit log: {manifest['records']} records, head `{manifest['head_sha256']}`.\n"
@@ -360,7 +362,7 @@ def summary(mode: str, records: list[dict], problems: list[str]) -> str:
 
 def run_controls(out: Path, sha: str, engine: str) -> int:
     plan = [{"action": action} for _, action in CONTROLS]
-    log = start_log("weakening", json.dumps(plan).encode("utf-8"), sha, engine)
+    log = start_log("weakening", json.dumps(plan).encode("utf-8"), sha, engine, out)
     records = []
     for weaken, action in CONTROLS:
         item = {"action": action, "kind": "attempt"}
@@ -371,6 +373,8 @@ def run_controls(out: Path, sha: str, engine: str) -> int:
         audit_action(log, record, sha, engine, weaken)
     finish_log(log)
     problems = judge_controls(records) + audit_verify.verify(log.records, log.manifest(), plan)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "plan-weakening.json").write_text(json.dumps(plan), encoding="utf-8")
     text = controls_summary(records, problems) + write_audit(out, log)
     (out / "summary-weakening.md").write_text(text, encoding="utf-8")
     print(text)
@@ -392,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_controls(Path(args.out), sha, engine)
     plan_bytes = Path(args.plan).read_bytes()
     plan = json.loads(plan_bytes.decode("utf-8"))
-    log = start_log(args.mode, plan_bytes, sha, engine)
+    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out))
     records, everything = [], ""
     for item in plan:
         record, text = evaluate(item, args.mode)

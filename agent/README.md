@@ -56,6 +56,9 @@ records), which are kept as the `agent-run` artifact. The **audit gate** then re
 log that is incomplete, inconsistent or altered. A second step damages the run's own log in four ways and
 requires each to be refused, because a gate that has never refused anything proves nothing.
 
+A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate in 21 ways and requires the
+tests to notice each one; it runs in CI.
+
 To check a log by hand:
 
 ```
