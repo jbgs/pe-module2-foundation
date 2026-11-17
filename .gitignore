@@ -49,3 +49,4 @@ __pycache__/
 # Records written by the agent sandbox test (kept as a build artifact, not in git)
 agent/out/
 __pycache__/
+.DS_Store
