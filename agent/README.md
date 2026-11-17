@@ -56,7 +56,7 @@ records), which are kept as the `agent-run` artifact. The **audit gate** then re
 log that is incomplete, inconsistent or altered. A second step damages the run's own log in four ways and
 requires each to be refused, because a gate that has never refused anything proves nothing.
 
-A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate in 21 ways and requires the
+A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate, the log writer and the publisher in 31 ways and requires the
 tests to notice each one; it runs in CI.
 
 To check a log by hand:
@@ -64,6 +64,48 @@ To check a log by hand:
 ```
 python3 agent/audit_verify.py audit-enforce.jsonl --manifest audit-enforce.manifest.json --expect agent/plan.json
 ```
+
+## The audit store
+
+On `main`, after the checks have passed, the pipeline publishes the logs to the audit store (`infra/audit`,
+[ADR 0006](../docs/adr/0006-audit-store.md)) with [`publish_audit.py`](publish_audit.py). For each of the three
+logs it writes three objects, each one **only if it does not exist yet**, with its SHA-256 checksum so that S3 refuses
+the object if the content is not what was sent:
+
+```
+agent-runs/<run>/<mode>/audit.jsonl     the log
+agent-runs/<run>/<mode>/manifest.json   the number of records and the head hash
+agent-runs/heads/<head hash>.json       a pointer named after the head hash, which cannot be predicted or taken first
+```
+
+Then, **with the writer's own role**, it tries to change what it has just written (write the same name again, with
+and without the condition; write outside the prefix; read it back; delete the version; delete it with the bypass of
+the lock; shorten its retention), and every attempt must be refused, each with the right error. The job fails if
+a write is refused (a name that is already taken is never replaced) or if the store accepts any of the attempts.
+
+The job runs only on `main`, never declares a GitHub `environment:` (that would change the subject of the token and
+stop matching the role), and is not a required check: a pull request never writes to the store. Each run on `main`
+has a concurrency group of its own, so no run is cancelled or replaced while it waits.
+
+What the attempts from the writer's role show is the limits **of the role** (it holds no permission to read, delete
+or change a retention, and the bucket policy denies it as well). The object lock itself is tested as an
+administrator, who does hold those permissions (see the proof of the audit store). Each kind of object, the log, the
+manifest and the pointer, is also checked to refuse a second write under its name.
+
+**If a publication fails.** Objects already written stay as they are: that is the point. Run the workflow again on
+`main` (`workflow_dispatch`): a new run publishes its own logs under its own names. If only the job is re-run, its
+logs get names of the new attempt, and a head pointer that already exists is not a failure (the name is made from the
+head hash, so the head was already recorded; the first pointer stands).
+
+To read a run back from the store and run the audit gate on it, with a profile that can read:
+
+```
+AUDIT_BUCKET=<bucket> python3 agent/publish_audit.py verify --run-id <run id>-<attempt>
+```
+
+Run it from the root of the repository (it refuses to run without the plan), ideally with the commit recorded in
+the log checked out (`source.commit` in its first record), so that the logs are checked against the plan of that
+commit. The expectation for the log of the controls comes from the code and never from a file stored with the log.
 
 ## What makes the run fail
 

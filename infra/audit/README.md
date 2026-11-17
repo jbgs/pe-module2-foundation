@@ -39,6 +39,13 @@ aws s3 cp s3://$BUCKET/agent-runs/<run>/<mode>/audit.jsonl .
 python3 agent/audit_verify.py audit.jsonl --manifest manifest.json
 ```
 
+or, for a whole run at once (it reads the three logs back, runs the audit gate on each, and checks that each head has
+its pointer):
+
+```
+AUDIT_BUCKET="$BUCKET" python3 agent/publish_audit.py verify --run-id <run id>-<attempt>
+```
+
 ## Clean up (a deliberate act)
 
 A lab does not need to keep records forever, and the bucket refuses to be destroyed while it holds locked objects.
