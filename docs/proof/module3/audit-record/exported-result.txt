@@ -1,0 +1,1 @@
+synthetic churn analysis: 8 customers, 3 churned (38%)
