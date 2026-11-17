@@ -81,7 +81,7 @@ log at the end, would lose exactly the actions that matter most.
 
 A gate that has never refused anything proves nothing, so it is tested three ways: 53 unit tests, most of which damage
 a good log and require the gate to notice; a **test of the tests**, `agent/mutation_check.py`, which weakens the
-verifier, the log writer and the publisher in 31 ways and requires the tests to notice each (it runs in CI, so the claim is
+verifier, the log writer and the publisher in 32 ways and requires the tests to notice each (it runs in CI, so the claim is
 reproducible); and, in CI, a step that damages the run's own log in four ways and requires each to be refused.
 
 The mutation check found, when it was first run, that four rules were covered only indirectly: because every record

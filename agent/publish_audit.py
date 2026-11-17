@@ -33,6 +33,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import audit
@@ -147,6 +148,9 @@ def publish_ok(results: list[dict]) -> bool:
 
 def refusals(bucket: str, key: str, version_id: str, runner=subprocess.run) -> list[dict]:
     """With the writer's own identity, try to change what was just written. Each attempt must be refused."""
+    # A date in the past is refused as an invalid request before the permission is even looked at, which would test
+    # nothing about who may change a retention. A date in the future that is shorter than the retention does.
+    shorter = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp) / "body.txt"
         body.write_text("an attempt to change a record\n", encoding="utf-8")
@@ -165,7 +169,7 @@ def refusals(bucket: str, key: str, version_id: str, runner=subprocess.run) -> l
              ["delete-object", "--bucket", bucket, "--key", key, "--version-id", version_id, "--bypass-governance-retention"]),
             ("shorten its retention", "AccessDenied",
              ["put-object-retention", "--bucket", bucket, "--key", key, "--version-id", version_id,
-              "--retention", "Mode=GOVERNANCE,RetainUntilDate=2020-01-01T00:00:00Z"]),
+              "--retention", f"Mode=GOVERNANCE,RetainUntilDate={shorter}"]),
         ]
         results = []
         for name, expected, command in attempts:
