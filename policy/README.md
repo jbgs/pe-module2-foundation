@@ -44,7 +44,8 @@ This policy is a function: it judges the input it is given. It cannot tell wheth
 only as strong as the component that builds the input, which must not be the agent. The enforcement point (the
 runner that executes the agent's actions) builds the input, and for a gated action it reads the approval from a
 system the agent cannot write to (the approval of a GitHub Environment), not from anything the agent supplies.
-That enforcement point is not in this change; it comes with the sandbox and the approval gate. Until then the
+That enforcement point is `agent/run_agent.py`: it builds the input and attaches no approval, so every gated
+action waits. Reading the approval from the Environment is the next change (the approval gate). Until then the
 rules below are tested, and the authenticity of an approval is not yet enforced.
 
 ## Run it

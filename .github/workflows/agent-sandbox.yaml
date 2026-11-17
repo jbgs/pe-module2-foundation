@@ -1,0 +1,78 @@
+name: Agent sandbox
+
+# Runs the scripted agent in a sandbox, in three ways, and fails if anything gets out.
+#
+#   enforce    the policy decides first; only allowed actions run
+#   bypass     the policy is switched off and every action runs in the sandbox, to show that the runtime
+#              stops the attempts by itself
+#   weakening  the negative controls: each limit is removed in turn and the attempt it holds back must escape,
+#              to show that every limit matters and that this test can fail
+#
+# It needs no credentials and no cloud account: the runner is a throwaway machine, the sandbox is a container
+# with no network, and nothing here can reach the repository's secrets. It runs on every pull request, so it
+# can be a required check.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-sandbox-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  escape-test:
+    name: Agent sandbox escape test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The policy engine is a single binary, fetched by version and refused unless its checksum matches.
+      - name: Install the pinned policy engine
+        env:
+          OPA_VERSION: v1.21.4
+          OPA_SHA256: 2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630
+        run: |
+          curl -fsSL -o opa "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  opa" | sha256sum --check --strict
+          mkdir -p "${HOME}/bin"
+          install -m 0755 opa "${HOME}/bin/opa"
+          echo "${HOME}/bin" >> "${GITHUB_PATH}"
+
+      - name: Tests of the enforcement point
+        run: python3 -m unittest discover -s agent -v
+
+      - name: Build the sandbox image
+        run: docker build -t agent-sandbox:ci agent/sandbox
+
+      - name: The policy decides, the sandbox runs
+        id: enforce
+        run: python3 agent/run_agent.py --mode enforce
+
+      # always(): the hard boundary is tested even when the policy layer has failed, because that is the case
+      # the boundary is for.
+      - name: Escape attempts with the policy switched off
+        id: bypass
+        if: always()
+        run: python3 agent/run_agent.py --mode bypass
+
+      # A test that has never failed proves little. Each limit is removed in turn and the attempt it holds back
+      # must then escape: if it does not, that limit was not what stopped it, or this test cannot see the escape.
+      - name: The test can fail, each limit removed in turn
+        id: controls
+        if: always()
+        run: python3 agent/run_agent.py --mode weakening
+
+      - name: Keep the records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-run
+          path: agent/out/
+          retention-days: 90
+          if-no-files-found: warn
