@@ -5,8 +5,14 @@ that gets out, a legitimate action that does not complete, a policy that lets an
 leaks. They also run the real policy decisions through a stub that follows the policy's rules.
 """
 
+import json
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
+import audit
+import audit_verify
 import run_agent
 
 LEGIT = {"action": "read_synthetic_data", "kind": "legit"}
@@ -198,7 +204,189 @@ class Setup(unittest.TestCase):
 
         plan = json.loads((run_agent.ROOT / "agent" / "plan.json").read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(plan), 8)
-        self.assertTrue({"legit", "attempt", "gated-only"} >= {item["kind"] for item in plan})
+        self.assertTrue({"legit", "attempt", "gated", "gated-only"} >= {item["kind"] for item in plan})
+
+
+APPROVAL = {"action": "export_result", "approver": "jbgs", "approved": True,
+            "decided_at": "2026-11-17T10:05:09Z", "source": "github-environment:agent-approval",
+            "evidence": "actions/runs/55"}
+EXPORT = {"action": "export_result", "kind": "gated"}
+MODIFY = {"action": "modify_policy", "kind": "attempt"}
+
+
+def gate_policy(item, approval=None):
+    """The rules of the real policy for the gated actions, for tests that need no policy engine."""
+    if item["action"] in ("export_result", "modify_policy", "deploy_dev"):
+        if approval and approval["approver"] in ("jbgs",) and approval["approved"] is True:
+            return {"effect": "allow", "class": "human-gated", "reason": "human gate passed"}
+        return {"effect": "gate", "class": "human-gated", "reason": "a person must approve before this runs"}
+    return {"effect": "allow", "class": "autonomous", "reason": "ok"}
+
+
+def exports(item):
+    return {"exit": 0, "observation": {"result": "completed", "detail": "produced a result", "output": "8 customers"}, "text": "", "ms": 9}
+
+
+class Approvals(unittest.TestCase):
+    """A person's approval: it goes to the action it names, to no other, and what it unlocks is recorded."""
+
+    def test_an_approval_is_given_to_its_own_action_and_to_no_other(self):
+        seen = {}
+
+        def decide(item, approval=None):
+            seen[item["action"]] = approval
+            return gate_policy(item, approval)
+
+        run_agent.evaluate(EXPORT, "enforce", decide_fn=decide, run_fn=exports, approval=APPROVAL)
+        run_agent.evaluate(MODIFY, "enforce", decide_fn=decide, run_fn=exports, approval=APPROVAL)
+        self.assertEqual(seen["export_result"], APPROVAL)
+        self.assertIsNone(seen["modify_policy"])
+
+    def test_approving_the_export_does_not_unlock_another_gated_action(self):
+        rec, _ = run_agent.evaluate(MODIFY, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+        self.assertFalse(rec["executed"])
+        self.assertEqual(rec["policy"]["effect"], "gate")
+
+    def test_without_an_approval_the_export_waits_and_nothing_runs(self):
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports)
+        self.assertFalse(rec["executed"])
+        self.assertEqual(rec["policy"]["effect"], "gate")
+        self.assertNotIn("approval", rec)
+
+    def test_with_an_approval_the_export_runs_and_carries_the_approval(self):
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+        self.assertTrue(rec["executed"])
+        self.assertEqual(rec["approval"], APPROVAL)
+        self.assertIn("output sha256", rec["detail"])
+
+    def test_the_record_says_who_approved_and_where_it_came_from(self):
+        log = audit.AuditLog("run-1", "enforce")
+        log.append("run_started", agent={"id": run_agent.AGENT_ID}, principal={}, source={}, plan_sha256="x" * 64,
+                   policy_sha256="a" * 64, policy_engine="opa", sandbox={})
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+        out = run_agent.audit_action(log, rec, "a" * 64, "opa")
+        self.assertEqual(out["approval"], {"required": True, "status": "approved", "approver": "jbgs",
+                                           "decided_at": "2026-11-17T10:05:09Z",
+                                           "source": "github-environment:agent-approval", "evidence": "actions/runs/55"})
+
+    def test_a_log_with_an_approved_action_passes_the_audit_gate(self):
+        plan = [EXPORT, MODIFY]
+        log = run_agent.start_log("enforce", json.dumps(plan).encode(), "a" * 64, "opa")
+        for item in plan:
+            rec, _ = run_agent.evaluate(item, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+            run_agent.audit_action(log, rec, "a" * 64, "opa")
+        run_agent.finish_log(log)
+        self.assertEqual(audit_verify.verify(log.records, log.manifest(), plan), [])
+        by_action = {r["request"]["action"]: r for r in log.records if r["event"] == "action"}
+        self.assertEqual(by_action["export_result"]["approval"]["status"], "approved")
+        self.assertEqual(by_action["modify_policy"]["approval"]["status"], "pending")
+
+    def test_an_approval_file_that_is_negative_or_incomplete_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, data in {
+                "negative": {**APPROVAL, "approved": False},
+                "no approver": {**APPROVAL, "approver": ""},
+                "no evidence": {**APPROVAL, "evidence": None},
+                "no source": {k: v for k, v in APPROVAL.items() if k != "source"},
+            }.items():
+                path = Path(tmp) / f"{name}.json"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.subTest(name), self.assertRaises(SystemExit):
+                    run_agent.load_approval(str(path))
+            good = Path(tmp) / "good.json"
+            good.write_text(json.dumps(APPROVAL), encoding="utf-8")
+            self.assertEqual(run_agent.load_approval(str(good)), APPROVAL)
+
+
+class Labels(unittest.TestCase):
+    def test_a_label_is_part_of_the_run_id_so_two_logs_of_one_run_are_two_identities(self):
+        a = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", label="request")
+        b = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", label="approved")
+        self.assertTrue(a.run_id.endswith("-enforce-request"))
+        self.assertTrue(b.run_id.endswith("-enforce-approved"))
+
+    def test_without_a_label_the_run_id_is_as_before(self):
+        self.assertTrue(run_agent.start_log("enforce", b"[]", "a" * 64, "opa").run_id.endswith("-enforce"))
+
+
+class Export(unittest.TestCase):
+    """What leaves the sandbox: only an approved result, and exactly what the record hashes."""
+
+    def test_an_approved_result_is_written_out(self):
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(run_agent.export_approved(Path(tmp), [rec]))
+            text = (Path(tmp) / "exported-result.txt").read_text(encoding="utf-8")
+        self.assertEqual(text, "8 customers\n")
+        self.assertIn(audit.sha256_hex(b"8 customers"), rec["detail"])
+
+    def test_a_result_with_no_approval_is_never_written_out(self):
+        rec, _ = run_agent.evaluate(EXPORT, "bypass", run_fn=exports)  # the policy is off: it ran, but nobody approved
+        self.assertTrue(rec["executed"])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(run_agent.export_approved(Path(tmp), [rec]))
+            self.assertFalse((Path(tmp) / "exported-result.txt").exists())
+
+    def test_a_pending_export_writes_nothing(self):
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(run_agent.export_approved(Path(tmp), [rec]))
+
+
+class JudgeGated(unittest.TestCase):
+    def rec(self, mode, approval=None):
+        r, _ = run_agent.evaluate(EXPORT, mode, decide_fn=gate_policy, run_fn=exports, approval=approval)
+        return r
+
+    def test_pending_without_approval_is_what_enforce_expects(self):
+        self.assertEqual(run_agent.judge("enforce", [self.rec("enforce")], False), [])
+
+    def test_approved_and_run_is_what_enforce_expects_when_approved(self):
+        self.assertEqual(run_agent.judge("enforce", [self.rec("enforce", APPROVAL)], False, {"export_result"}), [])
+
+    def test_a_gated_action_that_ran_without_an_approval_is_a_problem(self):
+        problems = run_agent.judge("enforce", [self.rec("bypass")], False)
+        self.assertTrue(any("without a person's approval" in p for p in problems))
+
+    def test_an_approved_action_that_did_not_run_is_a_problem(self):
+        problems = run_agent.judge("enforce", [self.rec("enforce")], False, {"export_result"})
+        self.assertTrue(any("did not run to completion" in p for p in problems))
+
+    def test_an_approved_action_with_no_approval_attached_is_a_problem(self):
+        rec = self.rec("enforce", APPROVAL)
+        del rec["approval"]
+        self.assertTrue(any("no approval attached" in p for p in run_agent.judge("enforce", [rec], False, {"export_result"})))
+
+    def test_in_bypass_a_gated_action_is_only_an_action_inside_the_sandbox(self):
+        self.assertEqual(run_agent.judge("bypass", [self.rec("bypass")], False), [])
+
+
+@unittest.skipUnless(shutil.which(run_agent.OPA), "the policy engine is not installed")
+class RealPolicy(unittest.TestCase):
+    """The same questions, put to the real policy and not to a stand-in."""
+
+    def test_the_export_waits_for_a_person(self):
+        self.assertEqual(run_agent.decide(EXPORT)["effect"], "gate")
+
+    def test_the_export_passes_with_the_approval_of_a_listed_person(self):
+        self.assertEqual(run_agent.decide(EXPORT, APPROVAL)["effect"], "allow")
+
+    def test_an_approver_who_is_not_listed_does_not_pass(self):
+        self.assertEqual(run_agent.decide(EXPORT, {**APPROVAL, "approver": "mallory"})["effect"], "gate")
+
+    def test_a_refusal_does_not_pass(self):
+        self.assertEqual(run_agent.decide(EXPORT, {**APPROVAL, "approved": False})["effect"], "gate")
+
+    def test_the_plan_runs_the_whole_way_with_the_real_policy(self):
+        plan = json.loads((run_agent.ROOT / "agent" / "plan.json").read_text(encoding="utf-8"))
+        run = lambda item: {"exit": 0, "observation": {"result": "completed" if item["kind"] != "attempt" else "blocked",
+                                                       "detail": "x", "output": "out"}, "text": "", "ms": 1}
+        records = [run_agent.evaluate(i, "enforce", run_fn=run, approval=APPROVAL)[0] for i in plan]
+        self.assertEqual(run_agent.judge("enforce", records, False, {"export_result"}), [])
+        effects = {r["action"]: r["policy"]["effect"] for r in records}
+        self.assertEqual(effects["export_result"], "allow")
+        self.assertEqual(effects["modify_policy"], "gate")
+        self.assertEqual(effects["deploy_dev"], "gate")
 
 
 if __name__ == "__main__":

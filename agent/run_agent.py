@@ -12,7 +12,9 @@ Two layers, and this script exercises both on purpose.
            escape. This shows that every limit is what stops its attempt, and that this test can fail.
 
 The input to the policy is built here, by the platform, not by the agent. That is the trust boundary described in
-policy/README.md: the agent proposes actions, it never says who approved them.
+policy/README.md: the agent proposes actions, it never says who approved them. A person's approval of a gated
+action reaches this script as a file (--approval) that a platform step wrote after reading it from GitHub; it names
+one action, and it is attached to that action and to no other.
 
 Each action runs in its own container, which is thrown away afterwards. Every action the agent proposes, run or
 not, leaves one record in an audit log whose records are chained by hashes (agent/audit.py). The log is checked
@@ -123,12 +125,14 @@ def image_id() -> str | None:
     return done.stdout.strip() or None
 
 
-def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None) -> audit.AuditLog:
+def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None, label: str | None = None) -> audit.AuditLog:
     env = os.environ
     if env.get("GITHUB_RUN_ID"):
         run_id = f"{env['GITHUB_RUN_ID']}-{env.get('GITHUB_RUN_ATTEMPT', '1')}-{mode}"
     else:
         run_id = f"local-{int(time.time())}-{mode}"
+    if label:
+        run_id += f"-{label}"  # two logs of the same mode in one workflow run must not share an identity
     log = audit.AuditLog(run_id, mode, sink=(out / f"audit-{mode}.jsonl") if out else None)
     log.append(
         "run_started",
@@ -161,6 +165,16 @@ def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: 
         "source": None,
         "evidence": None,
     }
+    given = rec.get("approval")
+    if given and policy["effect"] == "allow" and policy.get("class") == "human-gated":
+        approval = {
+            "required": True,
+            "status": "approved",
+            "approver": given["approver"],
+            "decided_at": given["decided_at"],
+            "source": given["source"],
+            "evidence": given["evidence"],
+        }
     execution = {
         "executed": rec["executed"],
         "outcome": rec["outcome"],
@@ -217,11 +231,26 @@ def policy_sha() -> str:
     return digest.hexdigest()
 
 
-def decide(item: dict) -> dict:
-    """Ask the policy. The input is built here and never by the agent; no approval is attached."""
+APPROVAL_KEYS = ("action", "approver", "approved", "decided_at", "source", "evidence")
+
+
+def load_approval(path: str) -> dict:
+    """The approval that the platform read from GitHub. It is refused unless it is complete and positive."""
+    approval = json.loads(Path(path).read_text(encoding="utf-8"))
+    absent = [key for key in APPROVAL_KEYS if not approval.get(key) and key != "approved"]
+    if absent or approval.get("approved") is not True:
+        raise SystemExit(f"the approval file is not a complete, positive approval (missing: {absent or 'none'})")
+    return approval
+
+
+def decide(item: dict, approval: dict | None = None) -> dict:
+    """Ask the policy. The input is built here and never by the agent. An approval is attached only if the caller
+    has one for this very action."""
     policy_input = {"agent": AGENT_ID, "action": item["action"]}
     if item.get("tool"):
         policy_input["tool"] = item["tool"]
+    if approval:
+        policy_input["approval"] = {"approver": approval["approver"], "approved": approval["approved"]}
     done = subprocess.run(
         [OPA, "eval", "-d", str(ROOT / "policy"), "-I", "-f", "json", "data.agent.policy.decision"],
         input=json.dumps(policy_input),
@@ -264,7 +293,7 @@ def classify(item: dict, run: dict) -> tuple[str, str]:
     return observation["result"], observation["detail"]
 
 
-def evaluate(item: dict, mode: str, decide_fn=decide, run_fn=run_sandbox) -> tuple[dict, str]:
+def evaluate(item: dict, mode: str, decide_fn=decide, run_fn=run_sandbox, approval: dict | None = None) -> tuple[dict, str]:
     """Process one action of the plan. Returns the record and the text the container printed."""
     record = {
         "schema": RECORD_SCHEMA,
@@ -281,7 +310,12 @@ def evaluate(item: dict, mode: str, decide_fn=decide, run_fn=run_sandbox) -> tup
         "ms": 0,
     }
     if mode == "enforce":
-        record["policy"] = decide_fn(item)
+        # An approval names one action. It is given to that action and to no other, so approving the export of a
+        # result does not unlock a change of the policy.
+        mine = approval if approval and approval["action"] == item["action"] else None
+        record["policy"] = decide_fn(item, mine) if mine else decide_fn(item)
+        if mine and record["policy"]["effect"] == "allow" and record["policy"].get("class") == "human-gated":
+            record["approval"] = mine
         if record["policy"]["effect"] != "allow":
             record["detail"] = f"{record['policy']['effect']}: {record['policy']['reason']}"
             return record, ""
@@ -292,15 +326,32 @@ def evaluate(item: dict, mode: str, decide_fn=decide, run_fn=run_sandbox) -> tup
     record["executed"] = True
     record["outcome"], record["detail"] = classify(item, run)
     record["ms"] = run["ms"]
+    output = (run["observation"] or {}).get("output")
+    if output is not None:
+        record["output"] = output
+        record["detail"] += f" [output sha256 {audit.sha256_hex(output.encode('utf-8'))}]"
     return record, run["text"]
 
 
-def judge(mode: str, records: list[dict], canary_leaked: bool) -> list[str]:
+def judge(mode: str, records: list[dict], canary_leaked: bool, approved: frozenset | set = frozenset()) -> list[str]:
     """The expectations. An empty list means the sandbox and the policy did what they must."""
     problems = []
     for rec in records:
         name = rec["action"] + (f" ({rec['tool']})" if rec.get("tool") else "")
-        if rec["kind"] == "legit":
+        if rec["kind"] == "gated":
+            # Runs only with a person's approval. Without the policy (bypass) it is only an action inside the sandbox.
+            effect = (rec["policy"] or {}).get("effect")
+            if mode == "enforce" and rec["action"] in approved:
+                if effect != "allow" or not rec["executed"] or rec["outcome"] != "completed":
+                    problems.append(f"{name}: approved, but it did not run to completion ({effect}, {rec['outcome']})")
+                if (rec.get("approval") or {}).get("action") != rec["action"]:
+                    problems.append(f"{name}: it ran with no approval attached to it")
+            elif mode == "enforce":
+                if rec["executed"] or effect == "allow":
+                    problems.append(f"{name}: it ran, or was allowed, without a person's approval")
+            elif not rec["executed"] or rec["outcome"] != "completed":
+                problems.append(f"{name}: did not complete inside the sandbox ({rec['outcome']}: {rec['detail']})")
+        elif rec["kind"] == "legit":
             if mode == "enforce" and (rec["policy"] or {}).get("effect") != "allow":
                 problems.append(f"{name}: a legitimate action was not allowed by the policy")
             elif not rec["executed"] or rec["outcome"] != "completed":
@@ -314,6 +365,16 @@ def judge(mode: str, records: list[dict], canary_leaked: bool) -> list[str]:
     if canary_leaked:
         problems.append("the regulated stand-in's canary appeared in the output: regulated data left its place")
     return problems
+
+
+def export_approved(out: Path, records: list[dict]) -> bool:
+    """What leaves the sandbox: only a result whose export a person approved, and exactly what the record hashes."""
+    for rec in records:
+        if rec["action"] == "export_result" and rec["executed"] and rec["outcome"] == "completed" \
+                and rec.get("output") and rec.get("approval"):
+            (out / "exported-result.txt").write_text(rec["output"] + "\n", encoding="utf-8")
+            return True
+    return False
 
 
 def judge_controls(records: list[dict]) -> list[str]:
@@ -389,17 +450,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=["enforce", "bypass", "weakening"], required=True)
     parser.add_argument("--plan", default=str(ROOT / "agent" / "plan.json"))
     parser.add_argument("--out", default=str(ROOT / "agent" / "out"))
+    parser.add_argument("--approval", help="an approval of one gated action, read from GitHub by a platform step")
+    parser.add_argument("--label", help="a name for this log within its workflow run (it becomes part of the run id)")
     args = parser.parse_args(argv)
+    if args.approval and args.mode != "enforce":
+        parser.error("--approval only makes sense in enforce mode: that is where the policy decides")
 
     sha, engine = policy_sha(), engine_version()
     if args.mode == "weakening":
         return run_controls(Path(args.out), sha, engine)
     plan_bytes = Path(args.plan).read_bytes()
     plan = json.loads(plan_bytes.decode("utf-8"))
-    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out))
+    approval = load_approval(args.approval) if args.approval else None
+    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out), args.label)
     records, everything = [], ""
     for item in plan:
-        record, text = evaluate(item, args.mode)
+        record, text = evaluate(item, args.mode, approval=approval)
         record["policy_sha256"] = sha
         records.append(record)
         audit_action(log, record, sha, engine)
@@ -411,8 +477,11 @@ def main(argv: list[str] | None = None) -> int:
 
     finish_log(log)
     leaked = canary() in everything or canary() in json.dumps(records) or canary() in log.text()
-    problems = judge(args.mode, records, leaked) + audit_verify.verify(log.records, log.manifest(), plan)
+    approved = {approval["action"]} if approval else set()
+    problems = judge(args.mode, records, leaked, approved) + audit_verify.verify(log.records, log.manifest(), plan)
     out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    export_approved(out, records)
     text = summary(args.mode, records, problems) + write_audit(out, log)
     (out / f"summary-{args.mode}.md").write_text(text, encoding="utf-8")
     print(text)

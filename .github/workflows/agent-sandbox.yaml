@@ -54,7 +54,7 @@ jobs:
       - name: Tests of the enforcement point and of the audit gate
         run: python3 -m unittest discover -s agent -v
 
-      # A test of the tests: the audit code is weakened on purpose in 32 ways, and the tests must notice each one.
+      # A test of the tests: the audit code is weakened on purpose in 42 ways, and the tests must notice each one.
       - name: The tests catch a weakened audit gate
         run: python3 agent/mutation_check.py
 

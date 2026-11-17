@@ -23,9 +23,11 @@ autonomous_actions := {
 	"call_approved_tool",
 }
 
-# Human-gated: a person must approve, because these touch a real system or change what agents may do.
+# Human-gated: a person must approve, because these touch a real system, change what agents may do, or take
+# something out of the sandbox.
 human_gated_actions := {
 	"deploy_dev",
+	"export_result",
 	"modify_policy",
 }
 

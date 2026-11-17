@@ -56,7 +56,7 @@ records), which are kept as the `agent-run` artifact. The **audit gate** then re
 log that is incomplete, inconsistent or altered. A second step damages the run's own log in four ways and
 requires each to be refused, because a gate that has never refused anything proves nothing.
 
-A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate, the log writer and the publisher in 32 ways and requires the
+A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate, the log writer and the publisher in 42 ways and requires the
 tests to notice each one; it runs in CI.
 
 To check a log by hand:
@@ -107,6 +107,21 @@ Run it from the root of the repository (it refuses to run without the plan), ide
 the log checked out (`source.commit` in its first record), so that the logs are checked against the plan of that
 commit. The expectation for the log of the controls comes from the code and never from a file stored with the log.
 
+## The human gate
+
+`export_result` is the action by which something **leaves the sandbox**, so it is gated: the agent produces a result, and
+a person decides whether it goes out. The workflow [`Agent approved run`](../.github/workflows/agent-approved-run.yaml), run
+by hand from `main`, has four jobs: the agent runs and the export **waits** (the log says `approval: pending`); a job behind
+the GitHub Environment `agent-approval` waits for a required reviewer, and a step then **reads from GitHub who approved**
+([`fetch_approval.py`](fetch_approval.py), from the review history of the run, with the run's token); the agent runs again
+with that approval, which is attached to the export and to no other action; and both logs are written to the audit store.
+The record then says who approved, when, where it came from and the hash of what left. How it works, how it fails
+closed, and what it does not prove (one person, no time from the API, the export and not the result) are in
+[ADR 0007](../docs/adr/0007-human-gate.md).
+
+The Environment is configured in the repository settings, and no code can set it: a required reviewer, and
+a restriction to the `main` branch. If it has no required reviewers, the history is empty and the flow stops.
+
 ## What makes the run fail
 
 - An attempt works (an "escape"), or does not run.
@@ -128,4 +143,4 @@ use a stand-in for the container and are safe anywhere.
 - The agent is a script. Prompt injection and the other risks that need a language model are not tested here.
 - The log is tamper-evident, not yet immutable: someone who can rewrite the whole log can recompute the chain, and
   only the head hash (kept apart) catches it. Where the head is kept is the next change.
-- No approval path exists yet, so every gated action is recorded as pending.
+- A gated action that nobody has approved is recorded as pending. A real approval comes from the GitHub Environment `agent-approval` (below).

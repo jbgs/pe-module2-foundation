@@ -90,6 +90,20 @@ test_input_without_an_action_is_denied if {
 	policy.decision.class == "unlisted" with input as {"agent": agent}
 }
 
+# What leaves the sandbox is human-gated: the agent may produce a result, it may not send it out on its own.
+test_exporting_a_result_waits_for_a_person if {
+	policy.decision.effect == "gate" with input as {"agent": agent, "action": "export_result"}
+	policy.decision.class == "human-gated" with input as {"agent": agent, "action": "export_result"}
+}
+
+test_exporting_a_result_passes_with_a_valid_approval if {
+	policy.decision.effect == "allow" with input as {"agent": agent, "action": "export_result", "approval": yes}
+}
+
+test_an_agent_cannot_approve_the_export_of_its_own_result if {
+	policy.decision.effect == "gate" with input as {"agent": "jbgs", "action": "export_result", "approval": yes}
+}
+
 # Changing the policy is human-gated: an agent can propose it, not apply it.
 test_changing_the_policy_is_never_autonomous if {
 	policy.decision.effect != "allow" with input as {"agent": agent, "action": "modify_policy"}

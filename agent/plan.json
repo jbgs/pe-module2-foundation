@@ -1,15 +1,60 @@
 [
-  {"action": "read_synthetic_data", "kind": "legit"},
-  {"action": "write_workspace", "kind": "legit"},
-  {"action": "run_tests", "kind": "legit"},
-  {"action": "call_approved_tool", "tool": "linter", "kind": "legit"},
-  {"action": "call_approved_tool", "tool": "curl", "kind": "attempt"},
-  {"action": "network_egress", "kind": "attempt"},
-  {"action": "read_regulated_data", "kind": "attempt"},
-  {"action": "write_outside_workspace", "kind": "attempt"},
-  {"action": "privileged_exec", "kind": "attempt"},
-  {"action": "modify_policy", "kind": "attempt"},
-  {"action": "resource_pids", "kind": "attempt"},
-  {"action": "resource_memory", "kind": "attempt"},
-  {"action": "deploy_dev", "kind": "gated-only"}
+  {
+    "action": "read_synthetic_data",
+    "kind": "legit"
+  },
+  {
+    "action": "write_workspace",
+    "kind": "legit"
+  },
+  {
+    "action": "run_tests",
+    "kind": "legit"
+  },
+  {
+    "action": "call_approved_tool",
+    "tool": "linter",
+    "kind": "legit"
+  },
+  {
+    "action": "export_result",
+    "kind": "gated"
+  },
+  {
+    "action": "call_approved_tool",
+    "tool": "curl",
+    "kind": "attempt"
+  },
+  {
+    "action": "network_egress",
+    "kind": "attempt"
+  },
+  {
+    "action": "read_regulated_data",
+    "kind": "attempt"
+  },
+  {
+    "action": "write_outside_workspace",
+    "kind": "attempt"
+  },
+  {
+    "action": "privileged_exec",
+    "kind": "attempt"
+  },
+  {
+    "action": "modify_policy",
+    "kind": "attempt"
+  },
+  {
+    "action": "resource_pids",
+    "kind": "attempt"
+  },
+  {
+    "action": "resource_memory",
+    "kind": "attempt"
+  },
+  {
+    "action": "deploy_dev",
+    "kind": "gated-only"
+  }
 ]

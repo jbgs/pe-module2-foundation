@@ -247,6 +247,19 @@ class Consistency(unittest.TestCase):
                                    "decided_at": "2026-11-17T09:00:00Z", "source": "x", "evidence": "y"}
                 self.assertTrue(any("without an approval" in p for p in self.problems()))
 
+    def test_an_approval_that_says_nothing_about_where_it_came_from(self):
+        for field in ("source", "evidence", "decided_at"):
+            with self.subTest(field=field):
+                self.records = copy.deepcopy(build("enforce").records)
+                rec = self.action("modify_policy")
+                rec["policy"]["effect"] = "allow"
+                rec["execution"]["executed"] = True
+                rec["execution"]["flags_sha256"] = "b" * 64
+                rec["approval"] = {"required": True, "status": "approved", "approver": "jbgs",
+                                   "decided_at": "2026-11-17T09:00:00Z", "source": "github-environment:x", "evidence": "run/1"}
+                rec["approval"][field] = None
+                self.assertTrue(any("without an approval" in p for p in self.problems()))
+
     def test_a_valid_human_approval_passes(self):
         rec = self.action("modify_policy")
         rec["policy"]["effect"] = "allow"

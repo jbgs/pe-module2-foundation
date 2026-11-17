@@ -98,18 +98,35 @@ def put_once(bucket: str, key: str, path: Path, runner=subprocess.run) -> dict:
     return result
 
 
-def publish(run_id: str, out_dir: Path, bucket: str, runner=subprocess.run) -> list[dict]:
+def parse_entry(text: str, with_dir: bool) -> tuple:
+    """`label=dir:mode` for publishing (the log audit-<mode>.jsonl in dir, stored under the name `label`), or
+    `label:mode` for reading back."""
+    try:
+        if with_dir:
+            label, rest = text.split("=", 1)
+            directory, mode = rest.rsplit(":", 1)
+            return label, Path(directory), mode
+        label, mode = text.split(":", 1)
+        return label, mode
+    except ValueError:
+        raise SystemExit(f"cannot read the entry {text!r}") from None
+
+
+def publish(run_id: str, out_dir: Path, bucket: str, runner=subprocess.run, entries: list | None = None) -> list[dict]:
+    """`entries` are (label, directory, mode): a log kept under a name of its own, for a run that leaves more than one
+    log of a mode (the request, with its gate pending, and the run that followed the approval)."""
+    entries = entries or [(mode, out_dir, mode) for mode in MODES]
     results = []
     with tempfile.TemporaryDirectory() as tmp:
-        for mode in MODES:
-            log = out_dir / f"audit-{mode}.jsonl"
-            manifest_path = out_dir / f"audit-{mode}.manifest.json"
+        for label, directory, mode in entries:
+            log = directory / f"audit-{mode}.jsonl"
+            manifest_path = directory / f"audit-{mode}.manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            log_key = run_key(run_id, mode, "audit.jsonl")
-            manifest_key = run_key(run_id, mode, "manifest.json")
+            log_key = run_key(run_id, label, "audit.jsonl")
+            manifest_key = run_key(run_id, label, "manifest.json")
             results.append(put_once(bucket, log_key, log, runner))
             results.append(put_once(bucket, manifest_key, manifest_path, runner))
-            pointer = Path(tmp) / f"head-{mode}.json"
+            pointer = Path(tmp) / f"head-{label}.json"
             pointer.write_text(
                 json.dumps(
                     {
@@ -118,6 +135,7 @@ def publish(run_id: str, out_dir: Path, bucket: str, runner=subprocess.run) -> l
                         "records": manifest["records"],
                         "run_id": manifest["run_id"],
                         "mode": mode,
+                        "label": label,
                         "log_key": log_key,
                         "manifest_key": manifest_key,
                         "commit": os.environ.get("GITHUB_SHA", "local"),
@@ -194,27 +212,27 @@ def write_once_checks(bucket: str, keys: list[tuple[str, str]], runner=subproces
     return results
 
 
-def verify_store(run_id: str, bucket: str, plan: list[dict] | None, runner=subprocess.run) -> list[str]:
+def verify_store(run_id: str, bucket: str, plan: list[dict] | None, runner=subprocess.run, entries: list | None = None) -> list[str]:
     """Read the logs back from the store and run the audit gate on them. Needs an identity that can read."""
     problems = []
     with tempfile.TemporaryDirectory() as tmp:
-        for mode in MODES:
+        for mode_label, mode in (entries or [(m, m) for m in MODES]):
             files = {}
             for name in ("audit.jsonl", "manifest.json"):
-                target = Path(tmp) / f"{mode}-{name}"
-                code, _, err = aws(["get-object", "--bucket", bucket, "--key", run_key(run_id, mode, name), str(target)], runner)
+                target = Path(tmp) / f"{mode_label}-{name}"
+                code, _, err = aws(["get-object", "--bucket", bucket, "--key", run_key(run_id, mode_label, name), str(target)], runner)
                 if code != 0:
-                    problems.append(f"{mode}: cannot read {name} from the store ({error_code(err) or 'error'})")
+                    problems.append(f"{mode_label}: cannot read {name} from the store ({error_code(err) or 'error'})")
                     break
                 files[name] = target
             else:
                 records = audit_verify.load_records(files["audit.jsonl"])
                 manifest = json.loads(files["manifest.json"].read_text(encoding="utf-8"))
                 expect = plan if mode != "weakening" else controls_plan()
-                problems += [f"{mode}: {p}" for p in audit_verify.verify(records, manifest, expect)]
+                problems += [f"{mode_label}: {p}" for p in audit_verify.verify(records, manifest, expect)]
                 code, _, _ = aws(["head-object", "--bucket", bucket, "--key", head_key(manifest["head_sha256"])], runner)
                 if code != 0:
-                    problems.append(f"{mode}: the head pointer is missing from the store")
+                    problems.append(f"{mode_label}: the head pointer is missing from the store")
     return problems
 
 
@@ -238,8 +256,12 @@ def main(argv: list[str] | None = None) -> int:
     pub.add_argument("--run-id", required=True)
     pub.add_argument("--out", default="agent/out")
     pub.add_argument("--no-refusals", action="store_true")
+    pub.add_argument("--entry", action="append", default=[], metavar="LABEL=DIR:MODE",
+                     help="publish the log audit-MODE.jsonl found in DIR under the name LABEL (repeatable)")
     ver = sub.add_parser("verify")
     ver.add_argument("--run-id", required=True)
+    ver.add_argument("--entry", action="append", default=[], metavar="LABEL:MODE",
+                     help="a log stored under the name LABEL, to be checked as a log of MODE (repeatable)")
     ver.add_argument("--plan", default="agent/plan.json",
                      help="the plan the logs of enforce and bypass are checked against; check out the commit "
                           "recorded in the log (source.commit of its first record) to use the plan of that commit")
@@ -252,20 +274,22 @@ def main(argv: list[str] | None = None) -> int:
                   f"or name the plan with --plan. Without it the logs of enforce and bypass cannot be checked against it.")
             return 1
         plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
-        problems = verify_store(args.run_id, bucket, plan)
+        problems = verify_store(args.run_id, bucket, plan, entries=[parse_entry(e, False) for e in args.entry] or None)
         for problem in problems:
             print(f"::error title=Audit store::{problem}")
         print("STORE VERIFIED: every log read back from the store passes the audit gate" if not problems
               else f"STORE NOT VERIFIED ({len(problems)} problem(s))")
         return 1 if problems else 0
 
-    results = publish(args.run_id, Path(args.out), bucket)
+    entries = [parse_entry(e, True) for e in args.entry] or None
+    results = publish(args.run_id, Path(args.out), bucket, entries=entries)
     checks: list[dict] = []
-    first = next((r for r in results if r["ok"] and r["key"].endswith("/enforce/audit.jsonl")), None)
+    first = next((r for r in results if r["ok"] and r["key"].endswith("/audit.jsonl")), None)
     if publish_ok(results) and not args.no_refusals and first and first["version_id"]:
         checks = refusals(bucket, first["key"], first["version_id"])
-        manifest = next(r for r in results if r["key"].endswith("/enforce/manifest.json"))
-        head = json.loads((Path(args.out) / "audit-enforce.manifest.json").read_text(encoding="utf-8"))["head_sha256"]
+        manifest = next(r for r in results if r["key"].endswith("/manifest.json"))
+        label, directory, mode = (entries or [("enforce", Path(args.out), "enforce")])[0]
+        head = json.loads((directory / f"audit-{mode}.manifest.json").read_text(encoding="utf-8"))["head_sha256"]
         checks += write_once_checks(bucket, [("manifest", manifest["key"]), ("head pointer", head_key(head))])
     text = summary(results, checks)
     print(text)

@@ -345,5 +345,58 @@ class Verify(unittest.TestCase):
         self.assertTrue(pa.verify_store("999-1", BUCKET, T.PLAN, self.reader.run))
 
 
+class Entries(unittest.TestCase):
+    """A run that leaves two logs of the same mode: the request (its gate pending) and the run after the approval."""
+
+    def make(self, tmp, name):
+        directory = Path(tmp) / name
+        directory.mkdir()
+        log = T.build("enforce")
+        (directory / "audit-enforce.jsonl").write_text(log.text(), encoding="utf-8")
+        (directory / "audit-enforce.manifest.json").write_text(json.dumps(log.manifest()), encoding="utf-8")
+        return directory
+
+    def test_the_entry_syntax(self):
+        self.assertEqual(pa.parse_entry("approved=agent/out-approved:enforce", True), ("approved", Path("agent/out-approved"), "enforce"))
+        self.assertEqual(pa.parse_entry("approved:enforce", False), ("approved", "enforce"))
+
+    def test_a_malformed_entry_is_refused(self):
+        for text, with_dir in (("nonsense", True), ("a=b", True), ("nonsense", False)):
+            with self.subTest(text), self.assertRaises(SystemExit):
+                pa.parse_entry(text, with_dir)
+
+    def test_two_logs_of_the_same_mode_are_stored_under_their_own_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request, approved = self.make(tmp, "request"), self.make(tmp, "approved")
+            s3 = FakeS3("writer")
+            results = pa.publish("200-1", request, BUCKET, s3.run,
+                                 entries=[("request", request, "enforce"), ("approved", approved, "enforce")])
+        keys = {r["key"] for r in results if "heads/" not in r["key"]}
+        self.assertEqual(keys, {pa.run_key("200-1", label, n) for label in ("request", "approved") for n in ("audit.jsonl", "manifest.json")})
+
+    def test_the_pointer_says_under_which_name_the_log_is_stored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            approved = self.make(tmp, "approved")
+            s3 = FakeS3("writer")
+            pa.publish("200-1", approved, BUCKET, s3.run, entries=[("approved", approved, "enforce")])
+        pointers = [json.loads(v) for k, v in s3.objects.items() if "heads/" in k]
+        self.assertEqual([p["label"] for p in pointers], ["approved"])
+        self.assertEqual(pointers[0]["log_key"], pa.run_key("200-1", "approved", "audit.jsonl"))
+
+    def test_reading_back_the_named_logs_passes_the_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request, approved = self.make(tmp, "request"), self.make(tmp, "approved")
+            writer = FakeS3("writer")
+            pa.publish("200-1", request, BUCKET, writer.run, entries=[("request", request, "enforce"), ("approved", approved, "enforce")])
+        reader = FakeS3("admin")
+        reader.objects = writer.objects
+        self.assertEqual(pa.verify_store("200-1", BUCKET, T.PLAN, reader.run, entries=[("request", "enforce"), ("approved", "enforce")]), [])
+
+    def test_a_named_log_that_is_missing_is_reported_under_its_name(self):
+        reader = FakeS3("admin")
+        problems = pa.verify_store("200-1", BUCKET, T.PLAN, reader.run, entries=[("approved", "enforce")])
+        self.assertTrue(any(p.startswith("approved:") and "cannot read" in p for p in problems))
+
+
 if __name__ == "__main__":
     unittest.main()
