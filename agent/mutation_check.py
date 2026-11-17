@@ -78,6 +78,12 @@ MUTANTS = [
     ("publish_audit.py", "a head that was already recorded is a failure, so a retry cannot succeed", 'recorded["ok"], recorded["note"] = True, "already recorded"', 'pass'),
     ("publish_audit.py", "the log of the controls is not checked against the code's expectation", 'else controls_plan()', 'else None'),
     ("publish_audit.py", "a manifest that can be replaced is not caught", '"ok": got == "PreconditionFailed"}', '"ok": True}'),
+    (
+        "publish_audit.py",
+        "the attempt to shorten the retention uses a date in the past, so it tests nothing",
+        'f"Mode=GOVERNANCE,RetainUntilDate={shorter}"',
+        '"Mode=GOVERNANCE,RetainUntilDate=2020-01-01T00:00:00Z"',
+    ),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]
 

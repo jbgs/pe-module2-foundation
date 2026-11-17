@@ -8,8 +8,10 @@ that the check on the store can fail: a check that never fails proves nothing.
 import base64
 import hashlib
 import json
+import re
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +54,12 @@ class FakeS3:
         denied = lambda code: SimpleNamespace(
             returncode=254, stdout="", stderr=f"\nAn error occurred ({code}) when calling the {operation} operation: x\n")
         ok = lambda out="": SimpleNamespace(returncode=0, stdout=out, stderr="")
+        if operation == "put-object-retention":
+            # The real store checks the request before it checks the permission: a date in the past is
+            # InvalidArgument, which tests nothing about who may change a retention. Seen in the first real run.
+            until = re.search(r"RetainUntilDate=([^,]+)", flags.get("--retention", ""))
+            if not until or datetime.strptime(until.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc):
+                return denied("InvalidArgument")
         if not self.strict:
             return self.permissive(operation, flags, positional)
         if operation == "put-object":
@@ -240,6 +248,14 @@ class Refusals(unittest.TestCase):
         checks = pa.refusals(BUCKET, "agent-runs/x", "v1", s3.run)
         self.assertTrue(any(not c["ok"] for c in checks))
         self.assertTrue(all(c["got"] == "ACCEPTED" for c in checks))
+
+    def test_the_attempt_to_shorten_the_retention_asks_for_a_date_in_the_future(self):
+        s3 = FakeS3("writer")
+        pa.refusals(BUCKET, "agent-runs/x", "v1", s3.run)
+        command = next(c for c in s3.commands if c[2] == "put-object-retention")
+        flags, _ = parse(command[3:])
+        until = re.search(r"RetainUntilDate=([^,]+)", flags["--retention"]).group(1)
+        self.assertGreater(datetime.strptime(until, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc), datetime.now(timezone.utc))
 
     def test_a_store_that_fails_for_another_reason_is_not_a_refusal(self):
         broken = lambda cmd, **kw: SimpleNamespace(returncode=1, stdout="", stderr="An error occurred (InternalError) x")
