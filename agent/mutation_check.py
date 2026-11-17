@@ -88,6 +88,7 @@ MUTANTS = [
     ("fetch_approval.py", "a rejected review is accepted as an approval", 'if last.get("state") != "approved":', "if False:"),
     ("fetch_approval.py", "a review of another environment is accepted", 'e.get("name") == environment', "True"),
     ("fetch_approval.py", "no review at all is not refused", "if not ours:", "if False:"),
+    ("fetch_approval.py", "more than one review is not treated as ambiguous", "if len(ours) > 1:", "if False:"),
     ("fetch_approval.py", "an approval with no time is accepted", "if not matches:", "if False:"),
     ("fetch_approval.py", "an approval that does not say who is accepted", "if not login:", "if False:"),
     ("run_agent.py", "an approval is given to every action, not only to the one it names", 'mine = approval if approval and approval["action"] == item["action"] else None', "mine = approval"),
@@ -99,6 +100,7 @@ MUTANTS = [
     ),
     ("run_agent.py", "a negative approval file is accepted", 'or approval.get("approved") is not True', "or False"),
     ("run_agent.py", "a result is exported without an approval", 'and rec.get("output") and rec.get("approval"):', 'and rec.get("output"):'),
+    ("run_agent.py", "a run that failed its own checks still exports a result", "return False if problems else export_approved(out, records)", "return export_approved(out, records)"),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]
 

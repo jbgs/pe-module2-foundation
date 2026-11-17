@@ -7,7 +7,9 @@ The approval is never supplied by the agent, and never by anything the agent can
 the run, from the review history of the workflow run (GET /repos/{repo}/actions/runs/{id}/approvals), which GitHub writes
 when a required reviewer of the environment approves.
 
-It fails closed. If the history holds no approval of this environment, or the approval is not `approved`, or the job
+It fails closed. If the history holds no approval of this environment, or more than one review of it (a re-run keeps
+the reviews of its earlier attempts, and the API does not say in what order it lists them), or the approval is not
+`approved`, or the job
 that follows the approval cannot be found, nothing is written and the exit status is not zero. That includes the case in
 which the environment lost its required reviewers: then no one approved, the history is empty, and this refuses to go on.
 
@@ -46,9 +48,14 @@ def find_approval(approvals: list, environment: str) -> dict:
     ]
     if not ours:
         raise ValueError(f"no review of the environment {environment!r} in the history of this run: nobody approved")
-    last = ours[-1]
+    if len(ours) > 1:
+        # The API does not say in what order it lists the reviews, and a re-run of a run keeps the reviews of its earlier
+        # attempts. With more than one, which one answers this request cannot be told, so none is trusted.
+        raise ValueError(f"{len(ours)} reviews of {environment!r} in the history of this run: it is ambiguous which one "
+                         f"answers this request. Start a new run instead of re-running this one")
+    last = ours[0]
     if last.get("state") != "approved":
-        raise ValueError(f"the last review of {environment!r} is {last.get('state')!r}, not approved")
+        raise ValueError(f"the review of {environment!r} is {last.get('state')!r}, not approved")
     login = (last.get("user") or {}).get("login")
     if not login:
         raise ValueError("the approval does not say who approved it")

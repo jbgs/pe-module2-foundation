@@ -5,8 +5,9 @@ name: Agent approved run
 #
 #   1. request   the agent runs, and the policy holds the export (the log says the approval is pending);
 #   2. approval  a job that waits behind the GitHub Environment `agent-approval`: a required reviewer approves it, and
-#                a step reads from GitHub, with this run's token, who approved;
-#   3. approved  the agent runs again, and the approval is attached to the export and to nothing else;
+#                a step checks, with this run's token, that GitHub has a clear approval to show;
+#   3. approved  reads who approved from GitHub itself (nothing travels between jobs), and the agent runs again, with
+#                the approval attached to the export and to nothing else;
 #   4. publish   both logs go to the audit store: the request with its approval pending, and the run that followed it.
 #
 # The approval is never supplied by the agent. It comes from the review history of this run, which GitHub writes when a
@@ -75,9 +76,10 @@ jobs:
         with:
           persist-credentials: false
 
-      # Read from GitHub who approved. Nothing is written, and the job fails, if there is no approval: a rejection, an
-      # environment with no required reviewers, or any answer in doubt.
-      - name: Read from GitHub who approved
+      # Fails if GitHub has no clear approval to show: a rejection, an environment with no required reviewers, more than
+      # one review (a re-run), or any answer in doubt. The result is not passed on: the job that uses the approval reads
+      # it again from GitHub itself, so the file does not have to be trusted in transit.
+      - name: Check that GitHub has an approval to show
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: >
@@ -85,13 +87,7 @@ jobs:
           --action export_result
           --environment agent-approval
           --job-name "A person approves the export"
-          --out approval/approval.json
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: approval
-          path: approval/
-          retention-days: 90
+          --out "${RUNNER_TEMP}/approval-check.json"
 
   approved:
     name: The agent runs again, with the approval
@@ -99,6 +95,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -118,12 +117,18 @@ jobs:
       - name: Build the sandbox image
         run: docker build -t agent-sandbox:ci agent/sandbox
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: approval
-          path: approval
+      # Read from GitHub, here, by the job that uses it. The approval names the export and nothing else.
+      - name: Read from GitHub who approved
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          python3 agent/fetch_approval.py
+          --action export_result
+          --environment agent-approval
+          --job-name "A person approves the export"
+          --out approval/approval.json
 
-      # The approval names the export and nothing else: modify_policy and deploy_dev stay pending.
+      # modify_policy and deploy_dev stay pending.
       - name: The policy decides, with the approval of a person
         run: python3 agent/run_agent.py --mode enforce --label approved --approval approval/approval.json --out agent/out-approved
 

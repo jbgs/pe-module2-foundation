@@ -281,16 +281,17 @@ def main(argv: list[str] | None = None) -> int:
               else f"STORE NOT VERIFIED ({len(problems)} problem(s))")
         return 1 if problems else 0
 
-    entries = [parse_entry(e, True) for e in args.entry] or None
+    entries = [parse_entry(e, True) for e in args.entry] or [(mode, Path(args.out), mode) for mode in MODES]
     results = publish(args.run_id, Path(args.out), bucket, entries=entries)
     checks: list[dict] = []
-    first = next((r for r in results if r["ok"] and r["key"].endswith("/audit.jsonl")), None)
-    if publish_ok(results) and not args.no_refusals and first and first["version_id"]:
-        checks = refusals(bucket, first["key"], first["version_id"])
-        manifest = next(r for r in results if r["key"].endswith("/manifest.json"))
-        label, directory, mode = (entries or [("enforce", Path(args.out), "enforce")])[0]
+    # The attempts to change a record are made on the first entry, named explicitly: its log, its manifest, its pointer.
+    label, directory, mode = entries[0]
+    log_key, manifest_key = run_key(args.run_id, label, "audit.jsonl"), run_key(args.run_id, label, "manifest.json")
+    written = {r["key"]: r for r in results}
+    if publish_ok(results) and not args.no_refusals and written.get(log_key, {}).get("version_id"):
         head = json.loads((directory / f"audit-{mode}.manifest.json").read_text(encoding="utf-8"))["head_sha256"]
-        checks += write_once_checks(bucket, [("manifest", manifest["key"]), ("head pointer", head_key(head))])
+        checks = refusals(bucket, log_key, written[log_key]["version_id"])
+        checks += write_once_checks(bucket, [("manifest", manifest_key), ("head pointer", head_key(head))])
     text = summary(results, checks)
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

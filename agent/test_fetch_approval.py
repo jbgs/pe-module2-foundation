@@ -52,10 +52,15 @@ class Find(unittest.TestCase):
         with self.assertRaises(ValueError):
             fa.find_approval([approval(state="pending")], ENV)
 
-    def test_the_last_review_counts(self):
-        with self.assertRaises(ValueError):
-            fa.find_approval([approval(), approval(state="rejected")], ENV)
-        self.assertEqual(fa.find_approval([approval(state="rejected"), approval(login="jbgs")], ENV)["state"], "approved")
+    def test_more_than_one_review_is_ambiguous_and_none_is_trusted(self):
+        # A re-run keeps the reviews of its earlier attempts, and the API does not say in what order it lists them.
+        for history in ([approval(), approval(state="rejected")], [approval(state="rejected"), approval()], [approval(), approval()]):
+            with self.subTest(history=[a["state"] for a in history]), self.assertRaises(ValueError) as caught:
+                fa.find_approval(history, ENV)
+            self.assertIn("ambiguous", str(caught.exception))
+
+    def test_a_review_of_another_environment_does_not_make_ours_ambiguous(self):
+        self.assertEqual(fa.find_approval([approval(env="something-else"), approval()], ENV)["state"], "approved")
 
     def test_an_approval_that_does_not_say_who_is_refused(self):
         bad = approval()

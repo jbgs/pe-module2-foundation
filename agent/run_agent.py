@@ -377,6 +377,11 @@ def export_approved(out: Path, records: list[dict]) -> bool:
     return False
 
 
+def export_if_clean(out: Path, records: list[dict], problems: list[str]) -> bool:
+    """A result is written out only if the run passed its own checks: a run that failed them exports nothing."""
+    return False if problems else export_approved(out, records)
+
+
 def judge_controls(records: list[dict]) -> list[str]:
     """The negative controls: with one limit removed, the attempt it held back must now escape."""
     problems = []
@@ -481,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     problems = judge(args.mode, records, leaked, approved) + audit_verify.verify(log.records, log.manifest(), plan)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    export_approved(out, records)
+    export_if_clean(out, records, problems)
     text = summary(args.mode, records, problems) + write_audit(out, log)
     (out / f"summary-{args.mode}.md").write_text(text, encoding="utf-8")
     print(text)

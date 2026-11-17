@@ -47,7 +47,8 @@ def export_result():
     with open("/data/churn.csv", encoding="utf-8") as handle:
         rows = [line.strip().split(",") for line in handle.read().splitlines()[1:] if line.strip()]
     churned = sum(1 for row in rows if row[-1] == "1")
-    text = f"synthetic churn analysis: {len(rows)} customers, {churned} churned ({round(100 * churned / len(rows))}%)"
+    share = round(100 * churned / len(rows)) if rows else 0
+    text = f"synthetic churn analysis: {len(rows)} customers, {churned} churned ({share}%)"
     with open("/workspace/result.txt", "w", encoding="utf-8") as handle:
         handle.write(text + "\n")
     return "completed", f"produced a result of {len(text)} bytes", text

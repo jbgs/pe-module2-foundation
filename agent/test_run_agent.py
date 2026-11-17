@@ -327,6 +327,13 @@ class Export(unittest.TestCase):
             self.assertFalse(run_agent.export_approved(Path(tmp), [rec]))
             self.assertFalse((Path(tmp) / "exported-result.txt").exists())
 
+    def test_a_run_that_failed_its_own_checks_exports_nothing(self):
+        rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports, approval=APPROVAL)
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(run_agent.export_if_clean(Path(tmp), [rec], ["something failed"]))
+            self.assertFalse((Path(tmp) / "exported-result.txt").exists())
+            self.assertTrue(run_agent.export_if_clean(Path(tmp), [rec], []))
+
     def test_a_pending_export_writes_nothing(self):
         rec, _ = run_agent.evaluate(EXPORT, "enforce", decide_fn=gate_policy, run_fn=exports)
         with tempfile.TemporaryDirectory() as tmp:

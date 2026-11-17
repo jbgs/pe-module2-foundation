@@ -30,7 +30,9 @@ for this action the gate is the policy and nothing else, which is why the policy
 3. A step then **reads from GitHub who approved**: `GET /repos/{repo}/actions/runs/{run}/approvals`, with the token of the
    run. The answer holds the environment, the state, the comment and the user who reviewed. The step writes an approval file
    with the approver (`user.login`), the action it is for, where it came from (`github-environment:agent-approval`) and the
-   run that holds the evidence.
+   run that holds the evidence. The job behind the environment only checks that GitHub has a clear approval to show; the
+   job that **uses** the approval reads it again from GitHub itself, so the file never travels between jobs and does not have
+   to be trusted in transit.
 4. The agent runs again. The enforcement point attaches the approval to the export **and to no other action**, and asks
    the policy, which allows it only if the approver is a listed approver and is not the agent.
 5. The record then says `status: approved`, the approver, the time, the source and the evidence, and the result that
@@ -49,6 +51,7 @@ approving the export does not unlock a change of the policy.
 | The environment has no required reviewers, so the job runs with nobody having approved | GitHub's history is empty; the step finds no approval, writes nothing and fails |
 | The reviewer rejects | The approval job fails; nothing runs after it |
 | The last review is `pending` or anything but `approved` | Refused |
+| More than one review of the environment (a re-run keeps the reviews of its earlier attempts, and the API does not say in what order it lists them) | Refused as ambiguous: none is trusted. Start a new run instead of re-running |
 | A review of another environment | Not counted |
 | The history cannot be read, or has no time | Refused |
 | The reviewer is not in the policy's list of approvers | The policy keeps the gate closed, the approved run fails its own check |
@@ -77,6 +80,9 @@ approving the export does not unlock a change of the policy.
 - **Two lists must agree**: the reviewers of the Environment (in the repository settings, outside the code) and the approvers in
   the policy (in the code). If they differ, the gate does not open: it fails closed.
 - **GitHub is trusted** to write the review history truthfully, and the settings of the Environment are an administrator's.
+- **Re-running a run is not supported for approvals.** A re-run keeps the reviews of its earlier attempts, which the step
+  refuses as ambiguous, so the way to try again is a new run. If only a failed job is re-run, the logs keep the run id
+  of the attempt that produced them, while the names in the store carry the attempt that published them.
 
 ## Consequences
 

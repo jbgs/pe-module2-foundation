@@ -56,7 +56,7 @@ records), which are kept as the `agent-run` artifact. The **audit gate** then re
 log that is incomplete, inconsistent or altered. A second step damages the run's own log in four ways and
 requires each to be refused, because a gate that has never refused anything proves nothing.
 
-A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate, the log writer and the publisher in 42 ways and requires the
+A **test of the tests**, [`mutation_check.py`](mutation_check.py), weakens the audit gate, the log writer and the publisher in 44 ways and requires the
 tests to notice each one; it runs in CI.
 
 To check a log by hand:
@@ -112,9 +112,10 @@ commit. The expectation for the log of the controls comes from the code and neve
 `export_result` is the action by which something **leaves the sandbox**, so it is gated: the agent produces a result, and
 a person decides whether it goes out. The workflow [`Agent approved run`](../.github/workflows/agent-approved-run.yaml), run
 by hand from `main`, has four jobs: the agent runs and the export **waits** (the log says `approval: pending`); a job behind
-the GitHub Environment `agent-approval` waits for a required reviewer, and a step then **reads from GitHub who approved**
-([`fetch_approval.py`](fetch_approval.py), from the review history of the run, with the run's token); the agent runs again
-with that approval, which is attached to the export and to no other action; and both logs are written to the audit store.
+the GitHub Environment `agent-approval` waits for a required reviewer; the job that uses the approval then **reads from GitHub
+who approved** ([`fetch_approval.py`](fetch_approval.py), from the review history of the run, with the run's token, so the
+approval does not travel between jobs); the agent runs again with that approval, which is attached to the export and to no
+other action; and both logs are written to the audit store.
 The record then says who approved, when, where it came from and the hash of what left. How it works, how it fails
 closed, and what it does not prove (one person, no time from the API, the export and not the result) are in
 [ADR 0007](../docs/adr/0007-human-gate.md).
