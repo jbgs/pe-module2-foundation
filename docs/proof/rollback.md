@@ -32,8 +32,10 @@ Full timeline, events and container logs: [`circuit-breaker/summary.md`](circuit
 
 ## What the test also showed
 
-- **CI did not catch the fault.** It runs the container on a writable filesystem. A check that runs it
-  read-only is a follow-up.
+- **CI did not catch the fault.** It ran the container on a writable filesystem. This is now fixed: since
+  pull request #16 the job starts the container with `--read-only`, as the task definition does. A throwaway
+  pull request (#17, closed without merging) carried the same fault and failed that job with
+  `OSError: [Errno 30] Read-only file system: '/tmp/started-at'`, while the unit tests and the other checks passed.
 - **State, code and service can disagree after an automatic rollback.** The service ran the previous version
   while the Terraform state pointed at the faulty one (a plan showed one change). Only rolling forward
   (reverting the change in code) put state, code and service back in agreement.
