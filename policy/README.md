@@ -38,6 +38,15 @@ at the runtime.
 
 The `class` and the `reason` go into the audit record, so the tests check them and not only the effect.
 
+## Trust boundary
+
+This policy is a function: it judges the input it is given. It cannot tell whether the input is true. So it is
+only as strong as the component that builds the input, which must not be the agent. The enforcement point (the
+runner that executes the agent's actions) builds the input, and for a gated action it reads the approval from a
+system the agent cannot write to (the approval of a GitHub Environment), not from anything the agent supplies.
+That enforcement point is not in this change; it comes with the sandbox and the approval gate. Until then the
+rules below are tested, and the authenticity of an approval is not yet enforced.
+
 ## Run it
 
 The version is pinned in the CI job `Policy tests` (`.github/workflows/ci.yaml`) with its checksum.
@@ -51,14 +60,18 @@ echo '{"agent":"a","action":"network_egress"}' | opa eval -d policy/ -I 'data.ag
 
 ## Changing the policy
 
-Changing this folder changes what agents may do, so it is itself a gated action: it goes through a pull request,
-the required checks (including `Policy tests`) must pass, and a person merges. An agent can propose a change; it
-cannot apply one.
+Changing this folder changes what agents may do, so it is itself a gated action. At run time `modify_policy` is
+human-gated in the policy. In the repository the control is the pull request: the required checks (including
+`Policy tests`, once it is required) must pass and a person merges. An agent can propose a change; it cannot
+apply one. This is one person, not a second reviewer: in a repository with a single owner a code-owner rule would
+add nothing, so there is none. There is also one approver, `jbgs`: adding another is a change to this policy.
 
 ## What the tests prove
 
-16 tests, and the tests themselves were tested: nine deliberate weakenings of the policy (an agent that approves
-its own action, an approver outside the list, a negative approval that passes, forbidden actions that stop being
-classified, a gated action that becomes autonomous, a tool outside the scope that passes, a default that allows)
-were each caught. Two of them were not caught at first, because the tests checked only the effect of a decision
-and not its class or reason; they do now.
+16 tests, and the tests themselves were tested: nine deliberate weakenings of the policy were each caught.
+They were: an agent that approves its own action; an approver outside the list; a negative approval that passes;
+forbidden actions that stop being classified; a gated action that becomes autonomous; an out-of-scope tool that is
+never denied; a tool-scope check that always passes (in two different ways); and a default that allows.
+Two of them were not caught at first, because the tests checked only the effect of a decision and not its class
+or reason; they do now. Two more were added after the review of this change, for the class of a denied tool and
+the class of an unlisted action.

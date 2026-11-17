@@ -81,7 +81,7 @@ decision := {
 
 decision := {
 	"effect": "deny",
-	"class": "autonomous",
+	"class": "forbidden",
 	"reason": "tool is not in the approved scope",
 } if {
 	input.action == "call_approved_tool"

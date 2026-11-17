@@ -29,6 +29,7 @@ test_approved_tool_is_allowed if {
 test_tool_outside_the_scope_is_denied if {
 	policy.decision.effect == "deny" with input as {"agent": agent, "action": "call_approved_tool", "tool": "curl"}
 	policy.decision.reason == "tool is not in the approved scope" with input as {"agent": agent, "action": "call_approved_tool", "tool": "curl"}
+	policy.decision.class == "forbidden" with input as {"agent": agent, "action": "call_approved_tool", "tool": "curl"}
 }
 
 test_tool_call_without_a_tool_is_denied if {
@@ -47,6 +48,7 @@ test_forbidden_actions_are_denied if {
 test_an_approval_does_not_unlock_a_forbidden_action if {
 	every a in policy.forbidden_actions {
 		policy.decision.effect == "deny" with input as {"agent": agent, "action": a, "approval": yes}
+		policy.decision.class == "forbidden" with input as {"agent": agent, "action": a, "approval": yes}
 	}
 }
 
@@ -85,6 +87,7 @@ test_an_unlisted_action_is_denied_by_default if {
 
 test_input_without_an_action_is_denied if {
 	policy.decision.effect == "deny" with input as {"agent": agent}
+	policy.decision.class == "unlisted" with input as {"agent": agent}
 }
 
 # Changing the policy is human-gated: an agent can propose it, not apply it.
