@@ -54,9 +54,17 @@ jobs:
       - name: Tests of the enforcement point and of the audit gate
         run: python3 -m unittest discover -s agent -v
 
-      # A test of the tests: the audit code is weakened on purpose in 44 ways, and the tests must notice each one.
+      # A test of the tests: the audit code is weakened on purpose in 47 ways, and the tests must notice each one.
       - name: The tests catch a weakened audit gate
         run: python3 agent/mutation_check.py
+
+      # The front door: a road is refused if it lacks the compliant defaults, a request no road covers is recorded, nothing
+      # regulated is ever copied. And the same, weakened on purpose in 18 ways, with the tests required to notice each.
+      - name: Tests of the golden path
+        run: python3 -m unittest discover -s golden-path -v
+
+      - name: The tests catch a weakened golden path
+        run: python3 golden-path/mutation_check.py
 
       - name: Build the sandbox image
         run: docker build -t agent-sandbox:ci agent/sandbox
@@ -64,6 +72,21 @@ jobs:
       - name: The policy decides, the sandbox runs
         id: enforce
         run: python3 agent/run_agent.py --mode enforce
+
+      # The golden path end to end, with the real sandbox: a request in words, an environment, an agent run inside that
+      # environment, and a record that names it, which the audit gate then checks.
+      - name: Golden path, end to end
+        run: |
+          python3 golden-path/golden_path.py new "a sandbox for an agent to analyse churn data" \
+            --name ci-golden-path --dest "${RUNNER_TEMP}/golden" --usage "${RUNNER_TEMP}/golden-usage.jsonl" --source workflow
+          python3 agent/run_agent.py --mode enforce --label golden --environment ci-golden-path \
+            --plan "${RUNNER_TEMP}/golden/ci-golden-path/plan.json" \
+            --data "${RUNNER_TEMP}/golden/ci-golden-path/data" \
+            --policy-dir "${RUNNER_TEMP}/golden/ci-golden-path/policy" \
+            --out agent/out-golden
+          python3 agent/audit_verify.py agent/out-golden/audit-enforce.jsonl --manifest agent/out-golden/audit-enforce.manifest.json --expect agent/plan.json
+          python3 -c "import json,sys; r=json.loads(open('agent/out-golden/audit-enforce.jsonl').readline()); assert r['environment']=={'id':'ci-golden-path'}, r['environment']; print('the record names the environment:', r['environment'])"
+          python3 golden-path/golden_path.py report --usage "${RUNNER_TEMP}/golden-usage.jsonl" --logs agent/out-golden
 
       # always(): the hard boundary is tested even when the policy layer has failed, because that is the case
       # the boundary is for.

@@ -73,6 +73,7 @@ CONTROLS = [
     ("data", "read_regulated_data"),
 ]
 SYNTHETIC_DIR = ROOT / "agent" / "synthetic"  # the only data the sandbox gets, read-only
+POLICY_DIR = ROOT / "policy"  # the rules that judge each action
 STANDIN_FILE = ROOT / "agent" / "regulated-standin" / "customers.csv"  # never mounted anywhere (except by the control)
 
 
@@ -125,7 +126,17 @@ def image_id() -> str | None:
     return done.stdout.strip() or None
 
 
-def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None, label: str | None = None) -> audit.AuditLog:
+def check_data_dir(path: Path) -> None:
+    """The sandbox is given synthetic data only. A folder that looks like regulated data is refused, whoever asks."""
+    names = [p.name.lower() for p in path.rglob("*") if p.is_file()]
+    if "regulated" in str(path).lower() or any("customers.csv" in n or "regulated" in n for n in names):
+        raise SystemExit(f"refusing to mount {path}: it looks like regulated data, and the sandbox gets synthetic data only")
+    if not names:
+        raise SystemExit(f"refusing to mount {path}: it holds no data")
+
+
+def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | None = None, label: str | None = None,
+              environment: str | None = None) -> audit.AuditLog:
     env = os.environ
     if env.get("GITHUB_RUN_ID"):
         run_id = f"{env['GITHUB_RUN_ID']}-{env.get('GITHUB_RUN_ATTEMPT', '1')}-{mode}"
@@ -143,6 +154,8 @@ def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | N
         policy_sha256=sha,
         policy_engine=engine,
         sandbox={"image_id": image_id(), "limits": limits_description(), "flags_sha256": flags_sha256()},
+        # The environment of the golden path that this run belongs to. A run without one is going around the path.
+        environment={"id": environment} if environment else None,
     )
     return log
 
@@ -226,7 +239,7 @@ def utc_now() -> str:
 def policy_sha() -> str:
     """One hash for the whole policy, so a record says which rules judged the action."""
     digest = hashlib.sha256()
-    for path in sorted((ROOT / "policy").glob("*.rego")):
+    for path in sorted(POLICY_DIR.glob("*.rego")):
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()
 
@@ -252,7 +265,7 @@ def decide(item: dict, approval: dict | None = None) -> dict:
     if approval:
         policy_input["approval"] = {"approver": approval["approver"], "approved": approval["approved"]}
     done = subprocess.run(
-        [OPA, "eval", "-d", str(ROOT / "policy"), "-I", "-f", "json", "data.agent.policy.decision"],
+        [OPA, "eval", "-d", str(POLICY_DIR), "-I", "-f", "json", "data.agent.policy.decision"],
         input=json.dumps(policy_input),
         capture_output=True,
         text=True,
@@ -457,17 +470,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=str(ROOT / "agent" / "out"))
     parser.add_argument("--approval", help="an approval of one gated action, read from GitHub by a platform step")
     parser.add_argument("--label", help="a name for this log within its workflow run (it becomes part of the run id)")
+    parser.add_argument("--environment", help="the id of the golden-path environment this run belongs to")
+    parser.add_argument("--data", help="the synthetic data to mount (default: agent/synthetic)")
+    parser.add_argument("--policy-dir", help="the policy to judge with (default: policy/)")
     args = parser.parse_args(argv)
     if args.approval and args.mode != "enforce":
         parser.error("--approval only makes sense in enforce mode: that is where the policy decides")
 
+    global SYNTHETIC_DIR, POLICY_DIR
+    if args.data:
+        SYNTHETIC_DIR = Path(args.data).resolve()
+    if args.policy_dir:
+        POLICY_DIR = Path(args.policy_dir).resolve()
+    check_data_dir(SYNTHETIC_DIR)
     sha, engine = policy_sha(), engine_version()
     if args.mode == "weakening":
         return run_controls(Path(args.out), sha, engine)
     plan_bytes = Path(args.plan).read_bytes()
     plan = json.loads(plan_bytes.decode("utf-8"))
     approval = load_approval(args.approval) if args.approval else None
-    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out), args.label)
+    log = start_log(args.mode, plan_bytes, sha, engine, Path(args.out), args.label, args.environment)
     records, everything = [], ""
     for item in plan:
         record, text = evaluate(item, args.mode, approval=approval)

@@ -1,0 +1,35 @@
+{
+  "name": "service-dev",
+  "title": "A development environment for the service",
+  "summary": "The environment of Module 2: network, registry, cluster and service on AWS, built and verified by the delivery pipeline from the code in the repository. Started by the Deploy workflow, with the size left at zero tasks unless asked.",
+  "kind": "dispatch",
+  "keywords": {
+    "environment": 2,
+    "dev": 2,
+    "development": 2,
+    "service": 2,
+    "deploy": 3,
+    "aws": 2,
+    "cloud": 1,
+    "container": 1,
+    "ecs": 2,
+    "running": 1,
+    "staging": 1
+  },
+  "defaults": {
+    "network_exposure": "the service port is open to one allowed address only",
+    "root_filesystem": "read-only",
+    "user": "unprivileged, no login shell",
+    "image": "tagged with the commit, immutable, scanned on push",
+    "rollback": "automatic by the deployment circuit breaker, and manual by deploying an older tag",
+    "state": "remote, encrypted, versioned and locked",
+    "account": "the provider refuses to run against any account but the lab account",
+    "size": "zero tasks until asked: a merge or a request never starts paid capacity by accident",
+    "data": "synthetic only",
+    "data_note": "the service holds no data of its own",
+    "audit": "every run of the pipeline is recorded; the dev environment is created and verified by it"
+  },
+  "workflow": "deploy.yaml",
+  "teardown": "an administrator destroys it with `terraform destroy` in infra/envs/dev. Not yet self-service: the pipeline's role cannot destroy it, on purpose",
+  "cost": "about 0.02 USD an hour while a task runs; close to nothing at zero tasks"
+}

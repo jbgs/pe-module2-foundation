@@ -101,6 +101,9 @@ MUTANTS = [
     ("run_agent.py", "a negative approval file is accepted", 'or approval.get("approved") is not True', "or False"),
     ("run_agent.py", "a result is exported without an approval", 'and rec.get("output") and rec.get("approval"):', 'and rec.get("output"):'),
     ("run_agent.py", "a run that failed its own checks still exports a result", "return False if problems else export_approved(out, records)", "return export_approved(out, records)"),
+    ("run_agent.py", "a folder that looks like regulated data is accepted", 'if "regulated" in str(path).lower() or any("customers.csv" in n or "regulated" in n for n in names):', "if False:"),
+    ("run_agent.py", "an empty data folder is accepted", "    if not names:\n        raise SystemExit", "    if False:\n        raise SystemExit"),
+    ("run_agent.py", "the environment of the path is not recorded", 'environment={"id": environment} if environment else None,', "environment=None,"),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]
 

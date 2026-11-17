@@ -298,6 +298,57 @@ class Approvals(unittest.TestCase):
             self.assertEqual(run_agent.load_approval(str(good)), APPROVAL)
 
 
+class DataGuard(unittest.TestCase):
+    """The sandbox is given synthetic data only, whoever asks."""
+
+    def folder(self, tmp, name, files):
+        d = Path(tmp) / name
+        d.mkdir()
+        for f in files:
+            (d / f).write_text("x", encoding="utf-8")
+        return d
+
+    def test_a_folder_of_synthetic_data_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_agent.check_data_dir(self.folder(tmp, "data", ["churn.csv"]))
+
+    def test_a_folder_that_looks_like_regulated_data_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, files in (("regulated-copy", ["a.csv"]), ("ok", ["customers.csv"]), ("ok2", ["regulated_export.csv"])):
+                with self.subTest(name), self.assertRaises(SystemExit):
+                    run_agent.check_data_dir(self.folder(tmp, name, files))
+
+    def test_an_empty_folder_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                run_agent.check_data_dir(self.folder(tmp, "empty", []))
+
+    def test_the_stand_in_of_the_repository_is_refused(self):
+        with self.assertRaises(SystemExit):
+            run_agent.check_data_dir(run_agent.STANDIN_FILE.parent)
+
+    def test_the_default_data_is_accepted(self):
+        run_agent.check_data_dir(run_agent.SYNTHETIC_DIR)
+
+
+class Environments(unittest.TestCase):
+    def test_a_run_inside_an_environment_of_the_path_names_it(self):
+        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", environment="agent-sandbox-1")
+        self.assertEqual(log.records[0]["environment"], {"id": "agent-sandbox-1"})
+
+    def test_a_run_outside_the_path_says_so(self):
+        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa")
+        self.assertIsNone(log.records[0]["environment"])
+
+    def test_the_log_with_an_environment_passes_the_audit_gate(self):
+        plan = [{"action": "read_synthetic_data", "kind": "legit"}]
+        log = run_agent.start_log("enforce", json.dumps(plan).encode(), "a" * 64, "opa", environment="e1")
+        rec, _ = run_agent.evaluate(plan[0], "enforce", decide_fn=gate_policy, run_fn=exports)
+        run_agent.audit_action(log, rec, "a" * 64, "opa")
+        run_agent.finish_log(log)
+        self.assertEqual(audit_verify.verify(log.records, log.manifest(), plan), [])
+
+
 class Labels(unittest.TestCase):
     def test_a_label_is_part_of_the_run_id_so_two_logs_of_one_run_are_two_identities(self):
         a = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", label="request")

@@ -50,3 +50,7 @@ __pycache__/
 agent/out/
 __pycache__/
 .DS_Store
+
+# Environments and usage made by the golden path on a machine
+golden-path/environments/
+golden-path/out/
