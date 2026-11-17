@@ -1,0 +1,9 @@
+customer_id,tenure_months,monthly_spend,support_tickets,churned
+SYN-0001,3,29.90,4,1
+SYN-0002,41,79.00,0,0
+SYN-0003,12,49.50,2,0
+SYN-0004,7,19.90,5,1
+SYN-0005,58,99.00,1,0
+SYN-0006,24,59.90,3,0
+SYN-0007,2,19.90,6,1
+SYN-0008,36,89.00,0,0
