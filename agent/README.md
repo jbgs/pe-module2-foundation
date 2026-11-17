@@ -22,8 +22,27 @@ The agent is a script, not a language model: it makes the proof repeatable. It "
    capabilities, limits on processes, memory and CPU, and only synthetic data. The decision to isolate, the
    options and the limit of this isolation are in [ADR 0004](../docs/adr/0004-agent-sandbox-isolation.md).
 
-The test runs the agent in both modes. In `bypass` mode the policy is switched off and every action runs in the
-sandbox, so the runtime has to stop the attempts on its own.
+The test runs the agent in two modes. In `enforce` the policy decides first. In `bypass` the policy is switched off
+and every action runs in the sandbox, so the runtime has to stop the attempts on its own. A third run, the
+negative controls, is described below.
+
+## The test can fail
+
+A green run proves little if it has never been red. So the job also removes the limits **one at a time** and
+checks that the attempt each one holds back then **escapes**:
+
+| Limit removed | Attempt that must then escape |
+|---|---|
+| `--network none` (replaced by a real network) | `network_egress` |
+| `--read-only` | `write_outside_workspace` (a write to `/tmp`, which any user can make) |
+| `--pids-limit` | `resource_pids` |
+| `--memory` | `resource_memory` |
+| the unprivileged user, `--cap-drop ALL` and `no-new-privileges` | `privileged_exec` |
+| the data boundary (the stand-in mounted) | `read_regulated_data` |
+
+This is also an honest account of what holds what. Privileged operations are refused mainly because the agent
+runs as an unprivileged user; dropping the capabilities and `no-new-privileges` are defence in depth, and the
+control removes all three together, so it does not tell them apart.
 
 ## What makes the run fail
 

@@ -125,6 +125,61 @@ class Bypass(unittest.TestCase):
         self.assertIn("canary", problems[0])
 
 
+class Controls(unittest.TestCase):
+    """The negative controls: remove one limit, and the attempt it held back must escape."""
+
+    def control(self, weaken, action, run):
+        rec, _ = run_agent.evaluate({"action": action, "kind": "attempt"}, "weakening", run_fn=lambda it: run(it))
+        rec["weakened"] = weaken
+        return rec
+
+    def test_an_attempt_that_escapes_once_the_limit_is_gone_is_a_pass(self):
+        rec = self.control("network", "network_egress", escapes)
+        self.assertEqual(run_agent.judge_controls([rec]), [])
+
+    def test_an_attempt_still_blocked_without_the_limit_is_a_problem(self):
+        rec = self.control("network", "network_egress", is_blocked)
+        problems = run_agent.judge_controls([rec])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("not what stops it", problems[0])
+
+    def test_a_kill_without_the_limit_is_a_problem_too(self):
+        rec = self.control("memory", "resource_memory", killed)
+        self.assertTrue(run_agent.judge_controls([rec]))
+
+    def test_every_control_names_a_limit_that_can_be_removed(self):
+        for weaken, action in run_agent.CONTROLS:
+            self.assertTrue(weaken in run_agent.WEAKENED or weaken == "data", weaken)
+            self.assertTrue(action)
+
+    def test_removing_a_limit_changes_only_that_limit(self):
+        base = run_agent.sandbox_flags()
+        for weaken in run_agent.WEAKENED:
+            weakened = run_agent.sandbox_flags(weaken)
+            self.assertNotEqual(base, weakened, weaken)
+            for other, group in run_agent.FLAG_GROUPS.items():
+                if other != weaken:
+                    for flag in group:
+                        self.assertIn(flag, weakened, f"removing {weaken} also removed {flag}")
+
+    def test_the_network_control_swaps_none_for_a_real_network(self):
+        flags = " ".join(run_agent.sandbox_flags("network"))
+        self.assertIn("--network bridge", flags)
+        self.assertNotIn("--network none", flags)
+
+    def test_the_readonly_control_removes_the_flag(self):
+        self.assertNotIn("--read-only", run_agent.sandbox_flags("readonly"))
+
+    def test_the_privilege_control_runs_as_root_with_default_capabilities(self):
+        flags = " ".join(run_agent.sandbox_flags("privilege"))
+        self.assertIn("--user 0", flags)
+        self.assertNotIn("--cap-drop", flags)
+
+    def test_only_the_data_control_mounts_the_regulated_stand_in(self):
+        self.assertNotIn("/regulated", " ".join(run_agent.sandbox_mounts()))
+        self.assertIn("/regulated", " ".join(run_agent.sandbox_mounts("data")))
+
+
 class Setup(unittest.TestCase):
     def test_the_sandbox_has_no_network_and_a_read_only_root(self):
         flags = " ".join(run_agent.SANDBOX_FLAGS)

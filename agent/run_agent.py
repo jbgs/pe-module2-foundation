@@ -8,6 +8,8 @@ Two layers, and this script exercises both on purpose.
   bypass   The policy is switched off and every action is run in the sandbox anyway. This is the test of the
            hard boundary: if the policy were wrong, or an agent found a way around it, the runtime must still
            stop every attempt. An attempt that works is a failure of the sandbox and fails this run.
+  weakening  The negative controls. Each limit is removed in turn, and the attempt it holds back must then
+           escape. This shows that every limit is what stops its attempt, and that this test can fail.
 
 The input to the policy is built here, by the platform, not by the agent. That is the trust boundary described in
 policy/README.md: the agent proposes actions, it never says who approved them.
@@ -38,21 +40,51 @@ OPA = os.environ.get("OPA_BIN", "opa")
 RECORD_SCHEMA = "agent-run/1"
 
 # The hard boundary. These are the whole of it, and they are set by the platform when it starts the container.
-SANDBOX_FLAGS = [
+FIXED_FLAGS = [
     "--rm",
-    "--network", "none",  # no network at all: nothing to reach, nothing to exfiltrate to
-    "--read-only",  # the root filesystem cannot be written
-    "--cap-drop", "ALL",  # no Linux capabilities
-    "--security-opt", "no-new-privileges",
-    "--pids-limit", "64",
-    "--memory", "128m",
-    "--memory-swap", "128m",  # no swap, so the memory limit is a limit
     "--cpus", "0.5",
     "--tmpfs", "/workspace:rw,noexec,nosuid,size=16m,uid=10001,gid=10001",  # the only writable place
     "--workdir", "/workspace",
 ]
+# Each limit is a group, so the test can take one away and check that it was the one holding something back.
+FLAG_GROUPS = {
+    "network": ["--network", "none"],  # no network at all: nothing to reach, nothing to exfiltrate to
+    "readonly": ["--read-only"],  # the root filesystem cannot be written
+    "privilege": ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"],  # no capabilities, no new privilege
+    "pids": ["--pids-limit", "64"],
+    "memory": ["--memory", "128m", "--memory-swap", "128m"],  # no swap, so the memory limit is a limit
+}
+# What each limit is replaced with when the test removes it. "privilege" becomes root with the default capabilities.
+WEAKENED = {"network": ["--network", "bridge"], "readonly": [], "privilege": ["--user", "0"], "pids": [], "memory": []}
+# The negative controls: remove one limit, and this attempt must then escape. If it does not, that limit is not what
+# was stopping it, or the test cannot see it.
+CONTROLS = [
+    ("network", "network_egress"),
+    ("readonly", "write_outside_workspace"),
+    ("pids", "resource_pids"),
+    ("memory", "resource_memory"),
+    ("privilege", "privileged_exec"),
+    ("data", "read_regulated_data"),
+]
 SYNTHETIC_DIR = ROOT / "agent" / "synthetic"  # the only data the sandbox gets, read-only
-STANDIN_FILE = ROOT / "agent" / "regulated-standin" / "customers.csv"  # never mounted anywhere
+STANDIN_FILE = ROOT / "agent" / "regulated-standin" / "customers.csv"  # never mounted anywhere (except by the control)
+
+
+def sandbox_flags(weaken: str | None = None) -> list[str]:
+    flags = list(FIXED_FLAGS)
+    for name, group in FLAG_GROUPS.items():
+        flags += WEAKENED[name] if weaken == name else group
+    return flags
+
+
+def sandbox_mounts(weaken: str | None = None) -> list[str]:
+    mounts = ["-v", f"{SYNTHETIC_DIR}:/data:ro"]
+    if weaken == "data":
+        mounts += ["-v", f"{STANDIN_FILE.parent}:/regulated:ro"]
+    return mounts
+
+
+SANDBOX_FLAGS = sandbox_flags()
 
 
 def utc_now() -> str:
@@ -82,9 +114,9 @@ def decide(item: dict) -> dict:
     return json.loads(done.stdout)["result"][0]["expressions"][0]["value"]
 
 
-def run_sandbox(item: dict) -> dict:
+def run_sandbox(item: dict, weaken: str | None = None) -> dict:
     """Run one action in a fresh, limited container. Returns what the container did."""
-    command = ["docker", "run", *SANDBOX_FLAGS, "-v", f"{SYNTHETIC_DIR}:/data:ro", IMAGE, item["action"]]
+    command = ["docker", "run", *sandbox_flags(weaken), *sandbox_mounts(weaken), IMAGE, item["action"]]
     if item.get("tool"):
         command.append(item["tool"])
     started = time.monotonic()
@@ -166,9 +198,37 @@ def judge(mode: str, records: list[dict], canary_leaked: bool) -> list[str]:
     return problems
 
 
+def judge_controls(records: list[dict]) -> list[str]:
+    """The negative controls: with one limit removed, the attempt it held back must now escape."""
+    problems = []
+    for rec in records:
+        if rec["outcome"] != "escaped":
+            problems.append(
+                f"without `{rec['weakened']}`, {rec['action']} was still {rec['outcome']}: "
+                f"that limit is not what stops it, or the test cannot see it"
+            )
+    return problems
+
+
 def canary() -> str:
     match = re.search(r"CANARY-[0-9a-f]{16}", STANDIN_FILE.read_text(encoding="utf-8"))
     return match.group(0) if match else ""
+
+
+def controls_summary(records: list[dict], problems: list[str]) -> str:
+    lines = [
+        "### Agent sandbox, negative controls",
+        "",
+        "Each limit is removed in turn. The attempt it holds back must then escape, which shows the test can fail.",
+        "",
+        "| Limit removed | Attempt | Outcome | Detail |",
+        "|---|---|---|---|",
+    ]
+    for rec in records:
+        lines.append(f"| `{rec['weakened']}` | `{rec['action']}` | {rec['outcome']} | {rec['detail']} |")
+    lines += ["", "**Result: " + ("every limit is load-bearing.**" if not problems else "FAILED.**")]
+    lines += [f"- {p}" for p in problems]
+    return "\n".join(lines) + "\n"
 
 
 def summary(mode: str, records: list[dict], problems: list[str]) -> str:
@@ -182,15 +242,37 @@ def summary(mode: str, records: list[dict], problems: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def run_controls(out: Path, sha: str) -> int:
+    records = []
+    for weaken, action in CONTROLS:
+        item = {"action": action, "kind": "attempt"}
+        record, _ = evaluate(item, "weakening", run_fn=lambda it, w=weaken: run_sandbox(it, w))
+        record["weakened"] = weaken
+        record["policy_sha256"] = sha
+        records.append(record)
+    problems = judge_controls(records)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "agent-run-weakening.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    text = controls_summary(records, problems)
+    (out / "summary-weakening.md").write_text(text, encoding="utf-8")
+    print(text)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+            handle.write(text)
+    return 1 if problems else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=["enforce", "bypass"], required=True)
+    parser.add_argument("--mode", choices=["enforce", "bypass", "weakening"], required=True)
     parser.add_argument("--plan", default=str(ROOT / "agent" / "plan.json"))
     parser.add_argument("--out", default=str(ROOT / "agent" / "out"))
     args = parser.parse_args(argv)
 
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     sha = policy_sha()
+    if args.mode == "weakening":
+        return run_controls(Path(args.out), sha)
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     records, everything = [], ""
     for item in plan:
         record, text = evaluate(item, args.mode)

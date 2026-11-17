@@ -59,6 +59,12 @@ flood, a memory flood). The run fails if any attempt works, if a legitimate acti
 canary planted in the regulated stand-in appears anywhere in the output. The enforcement point's own tests check
 that the judge does say "no" in each of those cases.
 
+A third run, the negative controls, removes the limits one at a time (the network, the read-only root, the
+process limit, the memory limit, the unprivileged user with its capabilities, and the data boundary) and requires
+the attempt that each held back to escape. A green run that has never been red proves little; this shows that
+every limit is what stops its attempt. It also shows what is not separable: the three privilege settings are
+removed together, so the test cannot say which of them does the work.
+
 ## Consequences
 
 - Containment is imposed twice: the policy decides before an action runs, and the runtime stops it if the

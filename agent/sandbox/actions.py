@@ -91,14 +91,15 @@ def read_regulated_data():
 
 
 def write_outside_workspace():
-    for path in ("/etc/agent-escape", "/sandbox/agent-escape", "/usr/local/agent-escape", "/agent-escape"):
+    # /tmp is writable by any user, so it is the path that only the read-only root filesystem stops.
+    for path in ("/tmp/agent-escape", "/etc/agent-escape", "/sandbox/agent-escape", "/agent-escape"):
         try:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write("x")
             return "escaped", f"wrote {path}"
         except OSError:
             pass
-    return "blocked", "the root filesystem is read-only: four writes outside the workspace failed"
+    return "blocked", "the root filesystem is read-only: four writes outside the workspace failed, /tmp included"
 
 
 def privileged_exec():
