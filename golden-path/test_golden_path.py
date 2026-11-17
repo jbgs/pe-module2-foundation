@@ -206,9 +206,51 @@ class Environment(unittest.TestCase):
         self.assertRegex(self.make()["id"], r"^agent-sandbox-20261117-120000-[0-9a-f]{8}$")
 
     def test_a_name_that_is_not_usable_is_refused(self):
-        for bad in ("../escape", "A Capital", "with space", "-dash", "a/b", ""):
+        for bad in ("../escape", "A Capital", "with space", "-dash", "a/b"):
             with self.subTest(bad), self.assertRaises(gp.Refused):
-                gp.create_local(self.road, SANDBOX_INTENT, self.dest, bad or None, NOW, "x") if bad else (_ for _ in ()).throw(gp.Refused("empty"))
+                gp.create_local(self.road, SANDBOX_INTENT, self.dest, bad, NOW, "x")
+
+    def test_a_part_of_a_word_is_not_regulated_data(self):
+        for name in ("regulated", "my-customers", "Customers.csv"):
+            self.assertTrue(gp.looks_regulated(name), name)
+        for name in ("unregulated", "deregulated", "customer", "churn.csv"):
+            self.assertFalse(gp.looks_regulated(name), name)
+
+    def test_without_a_name_one_is_made_and_never_an_empty_one(self):
+        self.assertTrue(self.make(name=None)["id"])
+
+    def test_the_environment_can_be_verified_and_a_change_is_seen(self):
+        record = self.make()
+        env = self.dest / record["id"]
+        self.assertEqual(gp.environment.verify(env, record["id"]), [])
+        self.assertEqual(gp.environment.template_of(env), record["template_sha256"])
+        (env / "data" / "churn.csv").write_text("changed")
+        self.assertTrue(gp.environment.verify(env, record["id"]))
+
+    def test_the_plan_and_readme_may_change_without_breaking_the_environment(self):
+        record = self.make()
+        env = self.dest / record["id"]
+        (env / "plan.json").write_text("[]")
+        (env / "README.md").write_text("notes")
+        self.assertEqual(gp.environment.verify(env, record["id"]), [])
+
+    def test_the_hash_of_the_template_is_the_one_the_enforcement_point_computes(self):
+        record = self.make()
+        files = gp.environment.read_files(self.dest / record["id"])
+        self.assertEqual(gp.environment.template_sha256(files), record["template_sha256"])
+
+    def test_what_looks_like_a_secret_is_not_kept_in_the_record_or_the_readme(self):
+        intent = SANDBOX_INTENT + " key sk-ant-abc123DEF and github_pat_ABCDEF123 mail ana@example.com acct 123456789012"
+        record = self.make(intent=intent)
+        env = self.dest / record["id"]
+        kept = record["intent"] + (env / "README.md").read_text() + (env / "environment.json").read_text()
+        for leaked in ("sk-ant-abc123DEF", "github_pat_ABCDEF123", "ana@example.com", "123456789012"):
+            self.assertNotIn(leaked, kept)
+        self.assertIn("[redacted]", record["intent"])
+
+    def test_redaction_keeps_an_ordinary_request_and_limits_its_length(self):
+        self.assertEqual(gp.redact(SANDBOX_INTENT), SANDBOX_INTENT)
+        self.assertEqual(len(gp.redact("a" * 500)), 200)
 
     def test_nothing_is_made_next_to_regulated_data(self):
         with self.assertRaises(gp.Refused):
@@ -462,19 +504,35 @@ class Report(unittest.TestCase):
             {"source": {"workflow": "Agent sandbox"}, "environment": None},            # tests the platform
             {"source": {"workflow": "Agent approved run"}, "environment": None},       # tests the platform
             {"source": {"workflow": "Golden path"}, "environment": {"id": "x"}},       # tests the platform
-            {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-1"}},
-            {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-2"}},
+            {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-1", "template_sha256": "h1"}},
+            {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-2", "template_sha256": "h2"}},
             {"source": {"workflow": "local"}, "environment": None},                    # going around the path
         ]
 
+    def made(self):
+        return [{"event": "environment_created", "road": "agent-sandbox", "template_sha256": h} for h in ("h1", "h2")]
+
     def test_runs_that_go_around_the_path_are_counted_and_the_platform_tests_are_not(self):
-        report = gp.build_report([], self.runs())
+        report = gp.build_report(self.made(), self.runs())
         self.assertEqual((report["agent_runs_via_the_path"], report["agent_runs_outside_the_path"], report["platform_test_runs"]), (2, 1, 3))
+        self.assertEqual(report["agent_runs_naming_an_unknown_environment"], 0)
         self.assertEqual(report["path_share_of_runs"], 0.67)
 
+    def test_a_run_naming_an_environment_the_path_never_made_is_not_counted_as_the_path(self):
+        runs = [{"source": {"workflow": "local"}, "environment": {"id": "made-up", "template_sha256": "zzz"}},
+                {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-1"}},  # no hash at all
+                {"source": {"workflow": "local"}, "environment": {"id": "agent-sandbox-1", "template_sha256": "h1"}}]
+        report = gp.build_report(self.made(), runs)
+        self.assertEqual((report["agent_runs_via_the_path"], report["agent_runs_naming_an_unknown_environment"]), (1, 2))
+        self.assertEqual(report["path_share_of_runs"], 0.33)
+
+    def test_with_no_usage_log_no_run_can_count_as_the_path(self):
+        report = gp.build_report([], self.runs()[3:5])
+        self.assertEqual((report["agent_runs_via_the_path"], report["agent_runs_naming_an_unknown_environment"]), (0, 2))
+
     def test_the_text_shows_the_signals(self):
-        text = gp.format_report(gp.build_report(self.usage(), self.runs()))
-        for needle in ("Environments made through the path: 3", "'a kubernetes cluster'", "going around the path", "path share 67%"):
+        text = gp.format_report(gp.build_report(self.usage() + self.made(), self.runs()))
+        for needle in ("Environments made through the path: 5", "'a kubernetes cluster'", "going around the path", "path share 67%"):
             self.assertIn(needle, text)
 
     def test_run_starts_are_read_from_a_folder_of_logs(self):
@@ -495,6 +553,58 @@ class Report(unittest.TestCase):
             code = gp.cmd_report(SimpleNamespace(usage=[str(Path(tmp) / "u.jsonl")], logs=None), out=said.append)
             self.assertEqual(code, 1)
             self.assertIn("does not verify", said[0])
+
+
+class StoreReport(unittest.TestCase):
+    """The count across all requests is made from the audit store, and only from logs whose chain verifies."""
+
+    def logs(self, tmp):
+        good = Path(tmp) / "good.jsonl"
+        gl = gp.UsageLog(good, lambda: NOW)
+        gl.append("environment_created", id="a", road="agent-sandbox", duration_ms=5, template_sha256="h1")
+        bad = Path(tmp) / "bad.jsonl"
+        bl = gp.UsageLog(bad, lambda: NOW)
+        bl.append("environment_created", id="b", road="agent-sandbox", duration_ms=1)
+        bl.append("environment_created", id="c", road="agent-sandbox", duration_ms=1)
+        bad.write_text(bad.read_text().replace('"duration_ms": 1', '"duration_ms": 9', 1))
+        return {"agent-runs/golden-path/1-1/usage.jsonl": good, "agent-runs/golden-path/2-1/usage.jsonl": bad}
+
+    def runner(self, files, list_fails=False):
+        def run(command, **kw):
+            if "list-objects-v2" in command:
+                if list_fails:
+                    return SimpleNamespace(returncode=254, stdout="", stderr="An error occurred (AccessDenied) when calling")
+                body = {"Contents": [{"Key": k} for k in files] + [{"Key": "agent-runs/golden-path/1-1/other.txt"}]}
+                return SimpleNamespace(returncode=0, stdout=json.dumps(body), stderr="")
+            key = command[command.index("--key") + 1]
+            Path(command[-1]).write_bytes(files[key].read_bytes())
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        return run
+
+    def test_only_logs_that_verify_are_counted_and_the_rest_are_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            records, problems = gp.fetch_store_usage("b", self.runner(self.logs(tmp)))
+        self.assertEqual([r["id"] for r in records], ["a"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn("2-1", problems[0])
+
+    def test_a_store_that_cannot_be_listed_gives_no_figures_and_says_why(self):
+        records, problems = gp.fetch_store_usage("b", self.runner({}, list_fails=True))
+        self.assertEqual(records, [])
+        self.assertIn("AccessDenied", problems[0])
+
+    def test_the_report_from_the_store_counts_what_verifies(self):
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            said = []
+            with mock.patch.dict(os.environ, {"AUDIT_BUCKET": "b"}, clear=True):
+                code = gp.cmd_report(SimpleNamespace(usage=[], logs=None, store=True), out=said.append, runner=self.runner(self.logs(tmp)))
+        self.assertEqual(code, 0)
+        text = "\n".join(said)
+        self.assertIn("Not counted", text)
+        self.assertIn("Environments made through the path: 1", text)
 
 
 class Publish(unittest.TestCase):

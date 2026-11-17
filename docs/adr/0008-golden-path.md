@@ -66,7 +66,7 @@ the time to an environment, and the signal that tells whether Builders **choose*
 That last signal is the runs of the agent that do not come from an environment of the path. The enforcement point accepts
 `--environment` and writes it in the first record of every run; a run without one is a run that went around. The runs that test
 the platform itself are not counted either way. The logs of the Golden path workflow are written to the audit store, so that
-adoption is counted in one place and cannot be edited afterwards.
+adoption is counted in one place and cannot be edited afterwards; `golden_path.py report --store` aggregates them, each chain checked.
 
 ### What a Builder types is never a command
 
@@ -96,6 +96,14 @@ assembling and the guessing, and what it adds is that the result is compliant by
   measure.
 - **There is no portal.** The market's lesson is to build the platform, with its roads and its defaults, before the portal; the
   front door here is a command and a form. A portal would be a shop front over the same roads.
+- **The measure of adoption detects negligence, not fraud.** An environment has an identity (a record with the hash of its data and
+  policy), `run_agent.py` refuses a run whose environment is missing, renamed or changed, and the report counts a run as "via the
+  path" only if the usage log has made an environment with that hash. Someone who builds a folder by hand with a matching record
+  can still produce one: no check on a developer's machine could stop that. It counts the honest and the careless, not the adversary.
+- **What the sandbox mounts is allowlisted by content, not by name.** The only data known to be synthetic is the platform's own, so
+  the files must equal `agent/synthetic` byte for byte. A name check alone is passed by regulated data under another name.
+- **A request is kept for good, and is redacted first.** Key, token, e-mail and long-number shapes are replaced before it is written;
+  that is a net with holes (a secret in a shape it does not know passes), so the form also tells the Builder not to paste any.
 - **A request typed locally is counted locally.** Only requests through the workflow reach the audit store; the local
   usage log is real and verifiable, but it is on that machine.
 

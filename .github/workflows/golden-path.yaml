@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       intent:
-        description: "What you need, in your own words (for example: a sandbox for an agent to analyse churn data)"
+        description: "What you need, in your own words. It is KEPT FOR GOOD: do not paste secrets or personal data (for example: a sandbox for an agent to analyse churn data)"
         required: true
         type: string
 
@@ -45,7 +45,9 @@ jobs:
             exit "${status}"
           fi
 
-      - name: Adoption so far
+      # Only this request: each run starts with an empty usage log. The count across all requests is made from the audit store
+      # with `golden_path.py report --store`, by someone who can read it.
+      - name: This request
         if: always()
         run: python3 golden-path/golden_path.py report --usage golden-path/out/usage.jsonl >> "${GITHUB_STEP_SUMMARY}"
 

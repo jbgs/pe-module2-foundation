@@ -40,6 +40,7 @@ ROADS_DIR = HERE / "paved-roads"
 sys.path.insert(0, str(ROOT / "agent"))
 
 import audit  # noqa: E402  (the same canonical form and hashes as the audit record)
+import environment  # noqa: E402  (what makes an environment what it says it is)
 
 USAGE_SCHEMA = "golden-path-usage/1"
 ENV_SCHEMA = "golden-path-environment/1"
@@ -61,6 +62,23 @@ REQUIRED_PRESENT = {
 
 class Refused(Exception):
     """Something the path will not do, with the reason."""
+
+
+# What a Builder types is kept, for good, in a store that cannot be edited. Things that look like a secret or a personal
+# identifier are removed before it is kept: the point of keeping a request is what it asks for, never what it leaks.
+SECRET_SHAPES = re.compile(
+    r"sk-ant-[A-Za-z0-9_\-]+|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12,}|"
+    r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|\b\d{9,}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+)
+
+
+def redact(intent: str, limit: int = 200) -> str:
+    return SECRET_SHAPES.sub("[redacted]", intent)[:limit]
+
+
+def looks_regulated(name: str) -> bool:
+    """Whole words only: a folder called `unregulated` is not regulated data."""
+    return bool({"regulated", "customers"} & set(re.split(r"[^a-z0-9]+", name.lower())))
 
 
 def utc_now() -> datetime:
@@ -231,17 +249,18 @@ def create_local(road: dict, intent: str, dest: Path, name: str | None, moment: 
     target = dest / env_id
     if target.exists():
         raise Refused(f"{target} already exists: the path never overwrites an environment")
-    if "regulated" in str(target).lower():
+    if any(looks_regulated(part) for part in target.parts):
         raise Refused("an environment is never made next to regulated data")
     files = {"data/" + p.name: p.read_bytes() for p in synthetic_files(root)}
     files["plan.json"] = (root / "agent" / "plan.json").read_bytes()
     files["policy/agent.rego"] = (root / "policy" / "agent.rego").read_bytes()
-    if any("regulated" in key or "customers.csv" in key for key in files):
+    if any(looks_regulated(key) for key in files):
         raise Refused("regulated data must never be copied into an environment")
+    intent = redact(intent)
     files["README.md"] = render_readme(env_id, road, intent).encode("utf-8")
-    template_sha = audit.sha256_hex(audit.canonical({k: audit.sha256_hex(v) for k, v in sorted(files.items())}))
+    template_sha = environment.template_sha256(files)
     record = {
-        "schema": ENV_SCHEMA, "id": env_id, "road": road["name"], "intent": intent[:200], "created_by": actor,
+        "schema": ENV_SCHEMA, "id": env_id, "road": road["name"], "intent": intent, "created_by": actor,
         "created_at": stamp(moment), "defaults": road["defaults"],
         "policy_sha256": audit.sha256_hex(files["policy/agent.rego"]), "template_sha256": template_sha, "files": sorted(files),
     }
@@ -277,10 +296,11 @@ def cmd_new(args, runner=subprocess.run, now=utc_now, roads: dict | None = None,
     started = time.monotonic()
     roads = load_roads() if roads is None else roads
     log = UsageLog(args.usage, now)
-    actor, intent = actor_from_env(), (args.intent or "").strip()
-    choice = choose(intent, roads)
+    actor, raw_intent = actor_from_env(), (args.intent or "").strip()
+    intent = redact(raw_intent)  # what is kept is the request without what looks like a secret
+    choice = choose(raw_intent, roads)
     if choice["road"] is None:
-        log.append("intent_not_covered", intent=intent[:200], reason=choice["reason"], detail=choice["detail"],
+        log.append("intent_not_covered", intent=intent, reason=choice["reason"], detail=choice["detail"],
                    scores=choice["scores"], by=actor, source=args.source)
         out(f"The path does not cover this: {choice['detail']}.")
         out("Paved roads: " + ", ".join(f"{n} ({r['title']})" for n, r in roads.items()))
@@ -304,7 +324,7 @@ def cmd_new(args, runner=subprocess.run, now=utc_now, roads: dict | None = None,
         except Refused as exc:
             out(f"Refused: {exc}")
             return 1
-        log.append("environment_created", id=record["id"], road=road["name"], intent=intent[:200], by=actor, source=args.source,
+        log.append("environment_created", id=record["id"], road=road["name"], intent=intent, by=actor, source=args.source,
                    duration_ms=int((time.monotonic() - started) * 1000), policy_sha256=record["policy_sha256"],
                    template_sha256=record["template_sha256"])
         out(f"Made {Path(args.dest) / record['id']} in {int((time.monotonic() - started) * 1000)} ms.")
@@ -315,7 +335,7 @@ def cmd_new(args, runner=subprocess.run, now=utc_now, roads: dict | None = None,
     out(f"Cost: {road['cost']}.")
     out(f"To tear it down: {road['teardown']}.")
     if not args.yes:
-        log.append("environment_planned", road=road["name"], intent=intent[:200], by=actor, source=args.source, command=command)
+        log.append("environment_planned", road=road["name"], intent=intent, by=actor, source=args.source, command=command)
         out("It starts paid infrastructure, so it asks first. This would run: " + " ".join(command))
         out("Add --yes to run it" + (" (with --running to leave a task running)." if not args.running else "."))
         return 0
@@ -325,7 +345,7 @@ def cmd_new(args, runner=subprocess.run, now=utc_now, roads: dict | None = None,
         log.append("dispatch_failed", road=road["name"], by=actor, source=args.source, duration_ms=duration)
         out("The workflow could not be started: " + (done.stderr or "").strip()[:200])
         return 1
-    log.append("environment_dispatched", road=road["name"], intent=intent[:200], by=actor, source=args.source, duration_ms=duration,
+    log.append("environment_dispatched", road=road["name"], intent=intent, by=actor, source=args.source, duration_ms=duration,
                desired_count=1 if args.running else 0)
     out(f"The {road['workflow']} workflow was started ({'one task' if args.running else 'zero tasks'}); follow it with `gh run watch`.")
     return 0
@@ -348,13 +368,18 @@ def build_report(usage: list[dict], started_logs: list[dict]) -> dict:
     by_road: dict[str, int] = {}
     for record in made:
         by_road[record["road"]] = by_road.get(record["road"], 0) + 1
-    via, outside, tests = 0, 0, 0
+    # A run counts as coming from the path only if the environment it names was made by the path: its hash is in the usage log.
+    made_templates = {r["template_sha256"] for r in usage if r.get("event") == "environment_created" and r.get("template_sha256")}
+    via, outside, tests, unverified = 0, 0, 0, 0
     for run in started_logs:
         workflow = (run.get("source") or {}).get("workflow")
+        claimed = run.get("environment") or {}
         if workflow in PLATFORM_TEST_WORKFLOWS:
             tests += 1
-        elif (run.get("environment") or {}).get("id"):
+        elif claimed.get("id") and claimed.get("template_sha256") in made_templates:
             via += 1
+        elif claimed.get("id"):
+            unverified += 1  # it names an environment that the usage log has never seen
         else:
             outside += 1
     asked = len(made) + len(planned) + len(misses)
@@ -364,7 +389,8 @@ def build_report(usage: list[dict], started_logs: list[dict]) -> dict:
         "asked": asked, "covered_share": round((len(made) + len(planned)) / asked, 2) if asked else None,
         "median_ms": int(statistics.median(durations)) if durations else None, "max_ms": durations[-1] if durations else None,
         "agent_runs_via_the_path": via, "agent_runs_outside_the_path": outside, "platform_test_runs": tests,
-        "path_share_of_runs": round(via / (via + outside), 2) if (via + outside) else None,
+        "agent_runs_naming_an_unknown_environment": unverified,
+        "path_share_of_runs": round(via / (via + outside + unverified), 2) if (via + outside + unverified) else None,
     }
 
 
@@ -381,6 +407,7 @@ def format_report(report: dict) -> str:
     lines += [f"Time to an environment, median:     {median}", "",
               f"Agent runs that came from an environment of the path: {report['agent_runs_via_the_path']}",
               f"Agent runs that did not (going around the path):      {report['agent_runs_outside_the_path']}   path share {pct(report['path_share_of_runs'])}",
+              f"Agent runs naming an environment the path never made:  {report['agent_runs_naming_an_unknown_environment']}",
               f"Runs that test the platform itself (not counted):      {report['platform_test_runs']}"]
     return "\n".join(lines)
 
@@ -398,8 +425,45 @@ def read_run_starts(logs_dir: Path) -> list[dict]:
     return starts
 
 
-def cmd_report(args, out=print) -> int:
+def fetch_store_usage(bucket: str, runner=subprocess.run) -> tuple[list[dict], list[str]]:
+    """Every usage log in the audit store, each checked on its own chain. Needs an identity that can read the store."""
+    import tempfile
+
+    import publish_audit
+
+    code, out, err = publish_audit.aws(["list-objects-v2", "--bucket", bucket, "--prefix", f"{publish_audit.PREFIX}golden-path/",
+                                        "--output", "json"], runner)
+    if code != 0:
+        return [], [f"the audit store cannot be listed ({publish_audit.error_code(err) or 'error'})"]
+    try:
+        keys = [o["Key"] for o in (json.loads(out or "{}").get("Contents") or []) if o["Key"].endswith("/usage.jsonl")]
+    except (ValueError, KeyError, TypeError):
+        return [], ["the listing of the audit store cannot be read"]
+    records, problems = [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        for index, key in enumerate(keys):
+            target = Path(tmp) / f"{index}.jsonl"
+            code, _, err = publish_audit.aws(["get-object", "--bucket", bucket, "--key", key, str(target)], runner)
+            if code != 0:
+                problems.append(f"{key}: cannot be read ({publish_audit.error_code(err) or 'error'})")
+                continue
+            bad = UsageLog.verify(target)
+            if bad:
+                problems.append(f"{key}: {bad[0]}")
+                continue
+            records += UsageLog.load(target)
+    return records, problems
+
+
+def cmd_report(args, out=print, runner=subprocess.run) -> int:
     usage = []
+    if getattr(args, "store", False):
+        import publish_audit
+
+        records, problems = fetch_store_usage(publish_audit.bucket_name(), runner)
+        for problem in problems:
+            out(f"Not counted: {problem}")
+        usage += records
     for path in args.usage:
         if Path(path).exists():
             problems = UsageLog.verify(path)
@@ -443,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
     rep = sub.add_parser("report")
     rep.add_argument("--usage", action="append", default=[], help="a usage log (repeatable)")
     rep.add_argument("--logs", help="a folder of audit logs: agent runs with and without an environment are counted")
+    rep.add_argument("--store", action="store_true",
+                     help="add every usage log in the audit store (needs an identity that can read it)")
     pub = sub.add_parser("publish")
     pub.add_argument("--usage", required=True)
     pub.add_argument("--run-id", required=True)
@@ -452,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list":
         return cmd_list(args)
     if args.command == "report":
-        args.usage = args.usage or [default_usage]
+        args.usage = args.usage or ([] if args.store else [default_usage])
         return cmd_report(args)
     return cmd_publish(args)
 

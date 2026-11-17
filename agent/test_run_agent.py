@@ -13,6 +13,7 @@ from pathlib import Path
 
 import audit
 import audit_verify
+import environment
 import run_agent
 
 LEGIT = {"action": "read_synthetic_data", "kind": "legit"}
@@ -298,43 +299,210 @@ class Approvals(unittest.TestCase):
             self.assertEqual(run_agent.load_approval(str(good)), APPROVAL)
 
 
+SYNTHETIC = run_agent.ROOT / "agent" / "synthetic"
+POLICY = run_agent.ROOT / "policy"
+
+
+def copy_synthetic(dest: Path) -> Path:
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in SYNTHETIC.iterdir():
+        if f.is_file():
+            (dest / f.name).write_bytes(f.read_bytes())
+    return dest
+
+
 class DataGuard(unittest.TestCase):
-    """The sandbox is given synthetic data only, whoever asks."""
+    """The sandbox is given synthetic data only, and the only data known to be synthetic is the platform's own."""
 
-    def folder(self, tmp, name, files):
-        d = Path(tmp) / name
-        d.mkdir()
-        for f in files:
-            (d / f).write_text("x", encoding="utf-8")
-        return d
-
-    def test_a_folder_of_synthetic_data_is_accepted(self):
+    def test_the_platforms_synthetic_data_is_accepted_wherever_it_is(self):
         with tempfile.TemporaryDirectory() as tmp:
-            run_agent.check_data_dir(self.folder(tmp, "data", ["churn.csv"]))
+            run_agent.check_data_dir(copy_synthetic(Path(tmp) / "data"))
+            # a parent folder whose name merely contains the word is not regulated data
+            run_agent.check_data_dir(copy_synthetic(Path(tmp) / "unregulated" / "data"))
 
-    def test_a_folder_that_looks_like_regulated_data_is_refused(self):
+    def test_the_default_data_is_accepted(self):
+        run_agent.check_data_dir(run_agent.SYNTHETIC_DIR)
+
+    def test_whole_words_only(self):
+        for name in ("regulated", "Regulated-copy", "customers.csv", "my_customers_2024.csv", "data/regulated/x"):
+            self.assertTrue(run_agent.looks_regulated(name), name)
+        for name in ("unregulated", "churn.csv", "deregulated-market", "customer.csv", "synthetic"):
+            self.assertFalse(run_agent.looks_regulated(name), name)
+
+    def test_a_folder_or_file_that_looks_like_regulated_data_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for name, files in (("regulated-copy", ["a.csv"]), ("ok", ["customers.csv"]), ("ok2", ["regulated_export.csv"])):
-                with self.subTest(name), self.assertRaises(SystemExit):
-                    run_agent.check_data_dir(self.folder(tmp, name, files))
+            bad = copy_synthetic(Path(tmp) / "regulated-copy")
+            with self.assertRaises(SystemExit) as caught:
+                run_agent.check_data_dir(bad)
+            self.assertIn("regulated data", str(caught.exception))
+            ok = copy_synthetic(Path(tmp) / "ok")
+            (ok / "customers.csv").write_text("x", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                run_agent.check_data_dir(ok)
+
+    def test_regulated_data_under_another_name_is_refused_because_it_is_not_the_platforms_data(self):
+        # The name guard alone would let this through: the stand-in's content, renamed.
+        with tempfile.TemporaryDirectory() as tmp:
+            disguised = Path(tmp) / "data"
+            disguised.mkdir()
+            (disguised / "export.csv").write_bytes(run_agent.STANDIN_FILE.read_bytes())
+            with self.assertRaises(SystemExit) as caught:
+                run_agent.check_data_dir(disguised)
+            self.assertIn("not the platform's synthetic data", str(caught.exception))
+
+    def test_the_right_name_with_other_content_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = copy_synthetic(Path(tmp) / "data")
+            (d / "churn.csv").write_text("customer_id,tenure\nSYN-9,1\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                run_agent.check_data_dir(d)
+
+    def test_an_extra_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = copy_synthetic(Path(tmp) / "data")
+            (d / "notes.txt").write_text("hello", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                run_agent.check_data_dir(d)
 
     def test_an_empty_folder_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "empty").mkdir()
             with self.assertRaises(SystemExit):
-                run_agent.check_data_dir(self.folder(tmp, "empty", []))
+                run_agent.check_data_dir(Path(tmp) / "empty")
 
     def test_the_stand_in_of_the_repository_is_refused(self):
         with self.assertRaises(SystemExit):
             run_agent.check_data_dir(run_agent.STANDIN_FILE.parent)
 
-    def test_the_default_data_is_accepted(self):
-        run_agent.check_data_dir(run_agent.SYNTHETIC_DIR)
+
+class PolicyGuard(unittest.TestCase):
+    """What judges the agent is the platform's policy, not whatever a caller points at."""
+
+    def policy_dir(self, tmp, files):
+        d = Path(tmp) / "policy"
+        d.mkdir()
+        for name, content in files.items():
+            (d / name).write_bytes(content)
+        return d
+
+    def test_a_copy_of_the_platforms_policy_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_agent.check_policy_dir(self.policy_dir(tmp, {"agent.rego": (POLICY / "agent.rego").read_bytes()}))
+            run_agent.check_policy_dir(self.policy_dir(Path(tmp) / "b", {}) if False else run_agent.POLICY_DIR)
+
+    def test_a_weaker_policy_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            weaker = (POLICY / "agent.rego").read_bytes().replace(b'"effect": "deny"', b'"effect": "allow"', 1)
+            with self.assertRaises(SystemExit) as caught:
+                run_agent.check_policy_dir(self.policy_dir(tmp, {"agent.rego": weaker}))
+            self.assertIn("not the platform's policy", str(caught.exception))
+
+    def test_a_folder_without_agent_rego_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                run_agent.check_policy_dir(self.policy_dir(tmp, {"other.rego": b"package x"}))
+
+    def test_an_extra_rule_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = {"agent.rego": (POLICY / "agent.rego").read_bytes(), "extra.rego": b"package agent.policy\n"}
+            with self.assertRaises(SystemExit):
+                run_agent.check_policy_dir(self.policy_dir(tmp, files))
+
+
+class RefusedEnvironments(unittest.TestCase):
+    """A run that names an environment is checked against it, and the module state is put back whatever happens."""
+
+    def env(self, tmp, **record):
+        d = Path(tmp) / "env1"
+        (d / "data").mkdir(parents=True)
+        (d / "policy").mkdir()
+        copy_synthetic(d / "data")
+        (d / "policy" / "agent.rego").write_bytes((POLICY / "agent.rego").read_bytes())
+        (d / "plan.json").write_text("[]", encoding="utf-8")
+        files = environment.read_files(d)
+        meta = {"id": "env1", "template_sha256": environment.template_sha256(files),
+                "policy_sha256": audit.sha256_hex(files["policy/agent.rego"])}
+        meta.update(record)
+        (d / "environment.json").write_text(json.dumps(meta), encoding="utf-8")
+        return d
+
+    def run_main(self, d, *extra):
+        return run_agent.main(["--mode", "enforce", "--plan", str(d / "plan.json"), "--environment", "env1", "--out", str(d / "out"), *extra])
+
+    def test_a_run_in_a_folder_that_is_not_an_environment_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "plan.json").write_text("[]")
+            with self.assertRaises(SystemExit) as caught:
+                run_agent.main(["--mode", "enforce", "--plan", str(Path(tmp) / "plan.json"), "--environment", "env1"])
+            self.assertIn("no environment.json", str(caught.exception))
+
+    def test_a_run_that_names_another_environment_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as caught:
+                run_agent.main(["--mode", "enforce", "--plan", str(self.env(tmp) / "plan.json"), "--environment", "somebody-elses"])
+            self.assertIn("not 'somebody-elses'", str(caught.exception))
+
+    def test_an_environment_whose_data_was_changed_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.env(tmp)
+            (d / "data" / "churn.csv").write_text("changed")
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main(d)
+            self.assertIn("not as they were", str(caught.exception))
+
+    def test_an_environment_whose_policy_was_changed_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.env(tmp)
+            (d / "policy" / "agent.rego").write_text("package agent.policy\n")
+            with self.assertRaises(SystemExit):
+                self.run_main(d)
+
+    def test_an_environment_whose_policy_is_an_older_one_is_refused(self):
+        # Intact, but no longer the platform's policy: it was made under another one.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.env(tmp)
+            old = b"package agent.policy\n# an older policy\n" + (POLICY / "agent.rego").read_bytes()
+            (d / "policy" / "agent.rego").write_bytes(old)
+            files = environment.read_files(d)
+            meta = json.loads((d / "environment.json").read_text())
+            meta.update(template_sha256=environment.template_sha256(files), policy_sha256=audit.sha256_hex(old))
+            (d / "environment.json").write_text(json.dumps(meta))
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main(d)
+            self.assertIn("not the platform's policy", str(caught.exception))
+
+    def test_a_run_that_uses_data_that_is_not_the_environments_own_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.env(tmp)
+            elsewhere = copy_synthetic(Path(tmp) / "elsewhere")
+            with self.assertRaises(SystemExit) as caught:
+                self.run_main(d, "--data", str(elsewhere))
+            self.assertIn("not the environment's own", str(caught.exception))
+
+    def test_the_module_state_is_put_back_after_a_refused_run(self):
+        before = (run_agent.SYNTHETIC_DIR, run_agent.POLICY_DIR)
+        with tempfile.TemporaryDirectory() as tmp:
+            elsewhere = copy_synthetic(Path(tmp) / "elsewhere")
+            weaker = Path(tmp) / "weaker"
+            weaker.mkdir()
+            (weaker / "agent.rego").write_text("package agent.policy\n")
+            with self.assertRaises(SystemExit):
+                run_agent.main(["--mode", "bypass", "--data", str(elsewhere), "--policy-dir", str(weaker), "--out", str(Path(tmp) / "o")])
+        self.assertEqual((run_agent.SYNTHETIC_DIR, run_agent.POLICY_DIR), before)
+
+    def test_the_state_is_put_back_even_after_a_data_folder_was_accepted(self):
+        before = (run_agent.SYNTHETIC_DIR, run_agent.POLICY_DIR)
+        with tempfile.TemporaryDirectory() as tmp:
+            good = copy_synthetic(Path(tmp) / "good")
+            with self.assertRaises(FileNotFoundError):  # the plan does not exist: it stops after the data was taken
+                run_agent.main(["--mode", "bypass", "--data", str(good), "--plan", str(Path(tmp) / "nope.json"), "--out", str(Path(tmp) / "o")])
+        self.assertEqual((run_agent.SYNTHETIC_DIR, run_agent.POLICY_DIR), before)
 
 
 class Environments(unittest.TestCase):
-    def test_a_run_inside_an_environment_of_the_path_names_it(self):
-        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", environment="agent-sandbox-1")
-        self.assertEqual(log.records[0]["environment"], {"id": "agent-sandbox-1"})
+    def test_a_run_inside_an_environment_of_the_path_names_it_and_its_hash(self):
+        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa", environment="agent-sandbox-1", environment_hash="h" * 64)
+        self.assertEqual(log.records[0]["environment"], {"id": "agent-sandbox-1", "template_sha256": "h" * 64})
 
     def test_a_run_outside_the_path_says_so(self):
         log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa")
@@ -342,7 +510,7 @@ class Environments(unittest.TestCase):
 
     def test_the_log_with_an_environment_passes_the_audit_gate(self):
         plan = [{"action": "read_synthetic_data", "kind": "legit"}]
-        log = run_agent.start_log("enforce", json.dumps(plan).encode(), "a" * 64, "opa", environment="e1")
+        log = run_agent.start_log("enforce", json.dumps(plan).encode(), "a" * 64, "opa", environment="e1", environment_hash="h" * 64)
         rec, _ = run_agent.evaluate(plan[0], "enforce", decide_fn=gate_policy, run_fn=exports)
         run_agent.audit_action(log, rec, "a" * 64, "opa")
         run_agent.finish_log(log)
