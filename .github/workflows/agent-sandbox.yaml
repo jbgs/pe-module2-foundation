@@ -85,7 +85,7 @@ jobs:
             --policy-dir "${RUNNER_TEMP}/golden/ci-golden-path/policy" \
             --out agent/out-golden
           python3 agent/audit_verify.py agent/out-golden/audit-enforce.jsonl --manifest agent/out-golden/audit-enforce.manifest.json --expect agent/plan.json
-          python3 -c "import json,sys; r=json.loads(open('agent/out-golden/audit-enforce.jsonl').readline()); assert r['environment']=={'id':'ci-golden-path'}, r['environment']; print('the record names the environment:', r['environment'])"
+          python3 -c "import json,sys; r=json.loads(open('agent/out-golden/audit-enforce.jsonl').readline()); e=json.load(open(sys.argv[1]+'/ci-golden-path/environment.json')); assert r['environment']=={'id':'ci-golden-path','template_sha256':e['template_sha256']}, r['environment']; print('the record names the environment and its hash:', r['environment'])" "${RUNNER_TEMP}/golden"
           python3 golden-path/golden_path.py report --usage "${RUNNER_TEMP}/golden-usage.jsonl" --logs agent/out-golden
 
       # always(): the hard boundary is tested even when the policy layer has failed, because that is the case
