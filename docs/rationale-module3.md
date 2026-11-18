@@ -1,0 +1,13 @@
+# Rationale: the agentic platform
+
+I built each control for the property it gives, not for its brand. Each one can be replaced by any tool with the same property, and the contract between them is narrow: an action, a decision, a record.
+
+- **Policy as code, default deny.** What an agent may do is a versioned rule file, not a habit. An action is autonomous, needs a person, or is forbidden; anything not named is denied, and an approver can never be the agent. Any policy engine with tests gives the same property. 19 tests pass, and 12 deliberate weakenings of the rules were each caught by them.
+- **A sandbox that holds without the policy.** The container has no network, a read-only filesystem, no capabilities, and limits on processes and memory, and it is given invented data only. With the policy layer switched off, all six escape attempts were still blocked. Each limit was then removed in turn and its attempt escaped (6 of 6), so the test can fail and the limits are load-bearing. Any runtime that can enforce these limits would do.
+- **A record that proves what happened.** Every decision is written to a hash-chained log with the policy version, the outcome and the approval. A gate verifies the chain and that the log matches the plan. The records go to a store that refuses to replace or shorten an object, written by an identity that can only add. The gate's own code was weakened in 58 ways, and the tests caught every one.
+- **A human gate that reaches the record.** A real approval was read from the platform that holds it, tied to one action, and written into the record: the export was approved by a named person, while the other gated actions stayed pending.
+- **A front door.** A request in plain words gets a compliant environment with no ticket, because the safe choices are the defaults. A request the path cannot serve is recorded as a miss. Two real requests were counted from the store, one covered and one not.
+
+**What this does not do.** The agent is scripted, not a model trying to get out. One account approves its own run, so the record shows who approved but not that it was someone else. A container shares the host kernel. The store's lock can be bypassed by an administrator, so the log is tamper-evident, not immutable. There is one Builder, so adoption is measured but not yet meaningful, and the measure detects carelessness, not fraud.
+
+**Next.** A second approver, a real model in the sandbox, and a stronger lock on the store.
