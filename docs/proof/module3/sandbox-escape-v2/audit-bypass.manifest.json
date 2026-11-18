@@ -1,0 +1,9 @@
+{
+  "schema": "agent-audit-manifest/1",
+  "run_id": "44314122726-1-bypass",
+  "mode": "bypass",
+  "records": 18,
+  "head_sha256": "92d3f00afcade25743d18e355c252862d28291989f4aad2907160b5618f439cf",
+  "first_timestamp": "2026-11-18T13:33:02Z",
+  "last_timestamp": "2026-11-18T13:33:09Z"
+}
