@@ -81,7 +81,7 @@ log at the end, would lose exactly the actions that matter most.
 
 A gate that has never refused anything proves nothing, so it is tested three ways: 53 unit tests, most of which damage
 a good log and require the gate to notice; a **test of the tests**, `agent/mutation_check.py`, which weakens the
-verifier, the log writer and the publisher in 65 ways and requires the tests to notice each (it runs in CI, so the claim is
+verifier, the log writer and the publisher in 77 ways and requires the tests to notice each (it runs in CI, so the claim is
 reproducible); and, in CI, a step that damages the run's own log in four ways and requires each to be refused.
 
 The mutation check found, when it was first run, that four rules were covered only indirectly: because every record
@@ -111,3 +111,21 @@ written and where its head is kept, not from these checks.
 - A change that cannot show a complete, consistent log fails the check `Agent sandbox escape test`, which is required.
 - The records are kept for 90 days as a build artifact, and the head hash of each log is printed in the run summary.
 - An auditor can verify a log offline, with the standard library and one script, without trusting the platform.
+
+## Alerts on attempts that were stopped
+
+A block that nobody can see is a control that cannot be shown to work. When an attempt is stopped, by the policy (denied) or
+by the sandbox (blocked or killed), the enforcement point raises an alert, and when an attempt gets out it raises a critical
+one. The alert is a field of the record, so it is inside the hash chain; it is shown as an annotation on the page of the run
+(an error when critical) and listed in a table in the run summary. A legitimate action and a gate waiting for a person raise
+nothing, because an alarm that rings for everything is not read. The negative controls make attempts succeed on purpose and so
+alert on nothing.
+
+The audit gate checks it: a log that declares `alerting` fails if a stopped attempt has no alert, if the severity is wrong
+(an escape must be critical), or if a harmless action carries one. A log made before this existed does not declare it and
+still verifies.
+
+What this does and does not do. "Alerted" means: written in the record, and visible to anyone who opens the run, in the
+annotations and in the summary. It does not push a message to a person: the CI service sends mail only when a run fails, and
+a blocked attempt is a pass. Routing alerts to a person (an issue, a message to a channel) is the next step, and it needs a
+rule about which runs are real, because every CI run here contains attempts on purpose.

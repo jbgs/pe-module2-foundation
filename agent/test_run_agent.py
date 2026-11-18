@@ -756,5 +756,176 @@ class GeneratedSource(unittest.TestCase):
             self.assertEqual(module.run_generated_code("analysis")[0], "error")
 
 
+class Alerts(unittest.TestCase):
+    """An attempt that was stopped, or that got out, raises an alert that somebody looking at the run can see, and that is
+    part of the record. Nothing else does: an alarm that rings for everything is not read."""
+
+    def rec(self, item, mode, decide, run):
+        return record(item, mode, decide, run)
+
+    def test_a_denied_attempt_is_a_warning(self):
+        alert = run_agent.alert_for(self.rec(ATTEMPT, "enforce", policy_denies, is_blocked))
+        self.assertEqual(alert["severity"], "warning")
+        self.assertIn("the policy denied", alert["why"])
+
+    def test_an_attempt_the_sandbox_stopped_is_a_warning(self):
+        for run in (is_blocked, killed):
+            alert = run_agent.alert_for(self.rec(ATTEMPT, "bypass", None, run))
+            self.assertEqual(alert["severity"], "warning", run.__name__)
+            self.assertIn("the sandbox stopped an attempt", alert["why"])
+
+    def test_an_attempt_that_got_out_is_critical(self):
+        alert = run_agent.alert_for(self.rec(ATTEMPT, "bypass", None, escapes))
+        self.assertEqual(alert["severity"], "critical")
+        self.assertIn("got out of the sandbox", alert["why"])
+
+    def test_a_legitimate_action_and_a_gate_waiting_for_a_person_raise_nothing(self):
+        self.assertIsNone(run_agent.alert_for(self.rec(LEGIT, "enforce", policy_allows, completes)))
+        self.assertIsNone(run_agent.alert_for(self.rec(EXPORT, "enforce", gate_policy, exports)))
+        self.assertIsNone(run_agent.alert_for(self.rec(GATED, "bypass", None, completes)))
+
+    def log_with(self, item, mode, decide, run, weaken=None):
+        log = run_agent.start_log(mode if mode != "weakening" else "weakening", json.dumps([item]).encode(), "a" * 64, "opa")
+        rec = self.rec(item, mode, decide, run)
+        out = run_agent.audit_action(log, rec, "a" * 64, "opa", weaken)
+        return log, out
+
+    def test_the_alert_is_in_the_record_and_so_in_the_hash_chain(self):
+        log, out = self.log_with(ATTEMPT, "enforce", policy_denies, is_blocked)
+        self.assertEqual(out["alert"]["severity"], "warning")
+        before = out["chain"]["sha256"]
+        out["alert"]["severity"] = "critical"
+        self.assertNotEqual(audit.record_hash(out), before)
+
+    def test_no_alert_key_when_none_is_raised(self):
+        _, out = self.log_with(LEGIT, "enforce", policy_allows, completes)
+        self.assertNotIn("alert", out)
+
+    def test_an_attempt_made_to_succeed_on_purpose_is_not_an_incident(self):
+        _, out = self.log_with(ATTEMPT, "weakening", None, escapes, weaken="network")
+        self.assertNotIn("alert", out)
+        self.assertIs(run_agent.start_log("weakening", b"[]", "a" * 64, "opa").records[0]["alerting"], False)
+
+    def test_a_log_declares_that_it_alerts(self):
+        self.assertIs(run_agent.start_log("enforce", b"[]", "a" * 64, "opa").records[0]["alerting"], True)
+
+    def test_the_annotation_names_the_action_and_the_reason(self):
+        rec = self.rec(CONTAINED, "enforce", policy_allows, is_blocked)
+        rec["alert"] = run_agent.alert_for(rec)
+        line = run_agent.annotation(rec)
+        self.assertTrue(line.startswith("::warning title=Sandbox alert (warning)::run_generated_code (escape)"))
+        rec["alert"] = {"severity": "critical", "why": "x"}
+        self.assertTrue(run_agent.annotation(rec).startswith("::error "))
+
+    def test_the_summary_lists_the_alerts_or_says_there_are_none(self):
+        quiet = self.rec(LEGIT, "enforce", policy_allows, completes)
+        self.assertIn("None raised", run_agent.alerts_section([quiet]))
+        loud = self.rec(ATTEMPT, "enforce", policy_denies, is_blocked)
+        loud["alert"] = run_agent.alert_for(loud)
+        text = run_agent.alerts_section([quiet, loud])
+        self.assertIn("1 raised", text)
+        self.assertIn("`network_egress`", text)
+
+    def run_plan(self, mode, decide, run):
+        plan = [LEGIT, ATTEMPT, CONTAINED, EXPORT]
+        log = run_agent.start_log(mode, json.dumps(plan).encode(), "a" * 64, "opa")
+        runs = {"legit": completes, "attempt": run, "contained": run, "gated": exports}
+        for item in plan:
+            rec, _ = run_agent.evaluate(item, mode, decide_fn=decide, run_fn=runs[item["kind"]])
+            run_agent.audit_action(log, rec, "a" * 64, "opa")
+        run_agent.finish_log(log)
+        return log, plan
+
+    def test_a_whole_run_with_its_alerts_passes_the_audit_gate(self):
+        def decide(item, approval=None):
+            return policy_denies(item) if item["kind"] == "attempt" else gate_policy(item, approval)
+
+        log, plan = self.run_plan("enforce", decide, is_blocked)
+        self.assertEqual(audit_verify.verify(log.records, log.manifest(), plan), [])
+        alerts = [r["alert"]["severity"] for r in log.records if r.get("alert")]
+        self.assertEqual(alerts, ["warning", "warning"])  # the denied attempt and the contained one; not the pending export
+
+
+class AuditGateAlerts(unittest.TestCase):
+    """The gate fails a log that says it alerts and did not."""
+
+    def make(self, outcome, decide=policy_allows, run=None, item=None, strip=False):
+        item = item or CONTAINED
+        log = run_agent.start_log("enforce", json.dumps([item]).encode(), "a" * 64, "opa")
+        rec, _ = run_agent.evaluate(item, "enforce", decide_fn=decide, run_fn=run or is_blocked)
+        out = run_agent.audit_action(log, rec, "a" * 64, "opa")
+        run_agent.finish_log(log)
+        return log, [item], out
+
+    def verify(self, log, plan, mutate=None):
+        records = json.loads(json.dumps(log.records))
+        if mutate:
+            mutate(records)
+        return audit_verify.verify(records, None, plan)
+
+    def rechain(self, records):
+        prev = records[0]["chain"]["prev"]
+        for r in records:
+            r["chain"]["prev"] = prev
+            r["chain"]["sha256"] = audit.record_hash(r)
+            prev = r["chain"]["sha256"]
+
+    def test_a_stopped_attempt_with_no_alert_fails(self):
+        log, plan, _ = self.make("blocked")
+
+        def strip(records):
+            del records[1]["alert"]
+            self.rechain(records)
+
+        self.assertTrue(any("with no alert" in p for p in self.verify(log, plan, strip)))
+
+    def test_an_alert_with_the_wrong_severity_fails(self):
+        log, plan, _ = self.make("blocked")
+
+        def wrong(records):
+            records[1]["alert"]["severity"] = "critical"
+            self.rechain(records)
+
+        self.assertTrue(any("should say 'warning'" in p for p in self.verify(log, plan, wrong)))
+
+    def test_an_escape_must_be_critical(self):
+        log, plan, _ = self.make("escaped", run=escapes)
+        self.assertEqual(self.verify(log, plan), [])
+
+        def soften(records):
+            records[1]["alert"]["severity"] = "warning"
+            self.rechain(records)
+
+        self.assertTrue(any("should say 'critical'" in p for p in self.verify(log, plan, soften)))
+
+    def test_an_alert_on_a_harmless_action_fails(self):
+        log, plan, _ = self.make("completed", item=LEGIT, run=completes)
+
+        def invent(records):
+            records[1]["alert"] = {"severity": "warning", "why": "x"}
+            self.rechain(records)
+
+        self.assertTrue(any("needed none" in p for p in self.verify(log, plan, invent)))
+
+    def test_a_log_made_before_alerts_existed_still_verifies(self):
+        log, plan, _ = self.make("blocked")
+
+        def old(records):
+            del records[0]["alerting"]
+            del records[1]["alert"]
+            self.rechain(records)
+
+        self.assertEqual(self.verify(log, plan, old), [])
+
+    def test_an_empty_why_is_not_an_alert(self):
+        log, plan, _ = self.make("blocked")
+
+        def empty(records):
+            records[1]["alert"]["why"] = ""
+            self.rechain(records)
+
+        self.assertTrue(any("with no alert" in p for p in self.verify(log, plan, empty)))
+
+
 if __name__ == "__main__":
     unittest.main()
