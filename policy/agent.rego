@@ -21,6 +21,9 @@ autonomous_actions := {
 	"write_workspace",
 	"run_tests",
 	"call_approved_tool",
+	# Code the agent writes at run time. The policy cannot read a script, so it allows the action; what holds is the
+	# sandbox (no network, read-only root, no capabilities, no regulated data), and the record says which script ran.
+	"run_generated_code",
 }
 
 # Human-gated: a person must approve, because these touch a real system, change what agents may do, or take

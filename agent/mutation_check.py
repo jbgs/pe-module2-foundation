@@ -114,6 +114,13 @@ MUTANTS = [
     ("environment.py", "an environment whose policy is not the recorded one is accepted", 'if policy is None or audit.sha256_hex(policy) != record.get("policy_sha256"):', "if False:"),
     ("environment.py", "a folder with no environment.json is accepted", "    if not record_path.is_file():", "    if False:"),
     ("environment.py", "the data is left out of the hash of an environment", 'HASHED = ("data/", "policy/")', 'HASHED = ("policy/",)'),
+    ("run_agent.py", "a contained attempt that the policy denied is accepted", 'if mode == "enforce" and (rec["policy"] or {}).get("effect") != "allow":\n                problems.append(f"{name}: expected the policy', 'if False:\n                problems.append(f"{name}: expected the policy'),
+    ("run_agent.py", "generated code that got out is accepted", 'problems.append(f"{name}: ESCAPED or failed to run ({rec[\'outcome\']}: {rec[\'detail\']})")\n        elif mode == "enforce":', 'problems.append(f"{name}: ESCAPED or failed to run ({rec[\'outcome\']}: {rec[\'detail\']})")\n        elif False:'),
+    ("run_agent.py", "the task of a request is not recorded", 'if rec.get("task"):\n        request["task"]', 'if False:\n        request["task"]'),
+    ("run_agent.py", "the task is not given to the container", 'if item.get("tool") or item.get("task"):', 'if item.get("tool"):'),
+    ("audit_verify.py", "the audit gate ignores which task was planned", 'wanted = [(item["action"], item.get("tool"), item.get("task")) for item in plan]', 'wanted = [(item["action"], item.get("tool"), None) for item in plan]'),
+    ("sandbox/actions.py", "generated code that printed ESCAPED is not reported", 'if "ESCAPED:" in printed:', "if False:"),
+    ("sandbox/actions.py", "generated code that failed is reported as a pass", "    if done.returncode != 0:", "    if False:"),
     ("run_agent.py", "the environment of the path is not recorded", 'environment={"id": environment, "template_sha256": environment_hash} if environment else None,', "environment=None,"),
     ("audit.py", "the first record is not tied to its run", 'return sha256_hex(f"{SCHEMA}|genesis|{run_id}".encode("utf-8"))', 'return sha256_hex(b"genesis")'),
 ]

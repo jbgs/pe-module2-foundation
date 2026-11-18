@@ -191,6 +191,8 @@ def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | N
 def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: str | None = None) -> dict:
     """One action, as the audit record says it: the request, the rules that judged it, the approval, the result."""
     request = {"action": rec["action"], "tool": rec.get("tool")}
+    if rec.get("task"):
+        request["task"] = rec["task"]  # only when there is one, so that records made before it existed still verify
     policy = rec["policy"] or {
         "effect": "bypassed",
         "class": None,
@@ -305,8 +307,8 @@ def decide(item: dict, approval: dict | None = None) -> dict:
 def run_sandbox(item: dict, weaken: str | None = None) -> dict:
     """Run one action in a fresh, limited container. Returns what the container did."""
     command = ["docker", "run", *sandbox_flags(weaken), *sandbox_mounts(weaken), IMAGE, item["action"]]
-    if item.get("tool"):
-        command.append(item["tool"])
+    if item.get("tool") or item.get("task"):
+        command.append(item.get("tool") or item["task"])
     started = time.monotonic()
     done = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
     observation = None
@@ -343,6 +345,7 @@ def evaluate(item: dict, mode: str, decide_fn=decide, run_fn=run_sandbox, approv
         "agent": AGENT_ID,
         "action": item["action"],
         "tool": item.get("tool"),
+        "task": item.get("task"),
         "kind": item["kind"],
         "policy": None,
         "executed": False,
@@ -378,7 +381,7 @@ def judge(mode: str, records: list[dict], canary_leaked: bool, approved: frozens
     """The expectations. An empty list means the sandbox and the policy did what they must."""
     problems = []
     for rec in records:
-        name = rec["action"] + (f" ({rec['tool']})" if rec.get("tool") else "")
+        name = rec["action"] + (f" ({rec['tool'] or rec['task']})" if rec.get("tool") or rec.get("task") else "")
         if rec["kind"] == "gated":
             # Runs only with a person's approval. Without the policy (bypass) it is only an action inside the sandbox.
             effect = (rec["policy"] or {}).get("effect")
@@ -397,6 +400,13 @@ def judge(mode: str, records: list[dict], canary_leaked: bool, approved: frozens
                 problems.append(f"{name}: a legitimate action was not allowed by the policy")
             elif not rec["executed"] or rec["outcome"] != "completed":
                 problems.append(f"{name}: a legitimate action did not complete ({rec['outcome']}: {rec['detail']})")
+        elif rec["kind"] == "contained":
+            # Code the agent wrote at run time. The policy cannot judge a script, so it allows the action, and the sandbox is
+            # what has to hold: the attempt must have run, and been stopped.
+            if mode == "enforce" and (rec["policy"] or {}).get("effect") != "allow":
+                problems.append(f"{name}: expected the policy to allow it and the sandbox to contain it, not {(rec['policy'] or {}).get('effect')}")
+            elif not rec["executed"] or rec["outcome"] not in ("blocked", "killed"):
+                problems.append(f"{name}: ESCAPED or failed to run ({rec['outcome']}: {rec['detail']})")
         elif mode == "enforce":
             if rec["executed"] or (rec["policy"] or {}).get("effect") == "allow":
                 problems.append(f"{name}: the policy let an attempt through")
@@ -460,7 +470,7 @@ def summary(mode: str, records: list[dict], problems: list[str]) -> str:
     lines = [f"### Agent sandbox, mode `{mode}`", "", "| Action | Policy | Ran | Outcome | Detail |", "|---|---|---|---|---|"]
     for rec in records:
         policy = (rec["policy"] or {}).get("effect", "off")
-        name = rec["action"] + (f" ({rec['tool']})" if rec.get("tool") else "")
+        name = rec["action"] + (f" ({rec['tool'] or rec['task']})" if rec.get("tool") or rec.get("task") else "")
         lines.append(f"| `{name}` | {policy} | {'yes' if rec['executed'] else 'no'} | {rec['outcome']} | {rec['detail']} |")
     lines += ["", "**Result: " + ("every expectation held.**" if not problems else "FAILED.**")]
     lines += [f"- {p}" for p in problems]
@@ -549,7 +559,7 @@ def _main(argv: list[str] | None = None) -> int:
         records.append(record)
         audit_action(log, record, sha, engine)
         everything += text
-        if record["kind"] == "attempt" and args.mode == "bypass" and record["outcome"] in ("blocked", "killed"):
+        if record["kind"] in ("attempt", "contained") and record["outcome"] in ("blocked", "killed") and (args.mode == "bypass" or record["kind"] == "contained"):
             print(f"::warning title=Escape attempt blocked::{record['action']}: {record['detail']}")
         elif record["kind"] != "legit" and args.mode == "enforce" and not record["executed"]:
             print(f"::notice title=Policy stopped an action::{record['action']}: {record['detail']}")

@@ -194,8 +194,8 @@ def verify(records: list[dict], manifest: dict | None = None, plan: list[dict] |
 
     # expectation
     if plan is not None:
-        wanted = [(item["action"], item.get("tool")) for item in plan]
-        got = [(r["request"]["action"], r["request"].get("tool")) for r in actions]
+        wanted = [(item["action"], item.get("tool"), item.get("task")) for item in plan]
+        got = [(r["request"]["action"], r["request"].get("tool"), r["request"].get("task")) for r in actions]
         if got != wanted:
             absent = [w for w in wanted if w not in got]
             extra = [g for g in got if g not in wanted]

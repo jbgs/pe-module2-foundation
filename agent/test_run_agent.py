@@ -205,7 +205,7 @@ class Setup(unittest.TestCase):
 
         plan = json.loads((run_agent.ROOT / "agent" / "plan.json").read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(plan), 8)
-        self.assertTrue({"legit", "attempt", "gated", "gated-only"} >= {item["kind"] for item in plan})
+        self.assertTrue({"legit", "attempt", "gated", "gated-only", "contained"} >= {item["kind"] for item in plan})
 
 
 APPROVAL = {"action": "export_result", "approver": "jbgs", "approved": True,
@@ -605,7 +605,7 @@ class RealPolicy(unittest.TestCase):
 
     def test_the_plan_runs_the_whole_way_with_the_real_policy(self):
         plan = json.loads((run_agent.ROOT / "agent" / "plan.json").read_text(encoding="utf-8"))
-        run = lambda item: {"exit": 0, "observation": {"result": "completed" if item["kind"] != "attempt" else "blocked",
+        run = lambda item: {"exit": 0, "observation": {"result": "completed" if item["kind"] not in ("attempt", "contained") else "blocked",
                                                        "detail": "x", "output": "out"}, "text": "", "ms": 1}
         records = [run_agent.evaluate(i, "enforce", run_fn=run, approval=APPROVAL)[0] for i in plan]
         self.assertEqual(run_agent.judge("enforce", records, False, {"export_result"}), [])
@@ -613,6 +613,147 @@ class RealPolicy(unittest.TestCase):
         self.assertEqual(effects["export_result"], "allow")
         self.assertEqual(effects["modify_policy"], "gate")
         self.assertEqual(effects["deploy_dev"], "gate")
+
+
+CONTAINED = {"action": "run_generated_code", "task": "escape", "kind": "contained"}
+GENERATED = {"action": "run_generated_code", "task": "analysis", "kind": "legit"}
+
+
+class GeneratedCode(unittest.TestCase):
+    """Code the agent writes at run time. The policy cannot read it, so the policy allows the action and the sandbox is
+    what must hold: the attempt has to run, and be stopped."""
+
+    def test_a_contained_attempt_that_was_stopped_is_what_both_modes_expect(self):
+        for mode in ("enforce", "bypass"):
+            rec = record(CONTAINED, mode, policy_allows if mode == "enforce" else None, is_blocked)
+            self.assertEqual(run_agent.judge(mode, [rec], False), [], mode)
+
+    def test_a_contained_attempt_that_got_out_is_a_problem(self):
+        for mode in ("enforce", "bypass"):
+            rec = record(CONTAINED, mode, policy_allows if mode == "enforce" else None, escapes)
+            self.assertTrue(any("ESCAPED" in p for p in run_agent.judge(mode, [rec], False)), mode)
+
+    def test_a_contained_attempt_that_never_ran_is_a_problem(self):
+        rec = record(CONTAINED, "enforce", policy_denies, is_blocked)
+        problems = run_agent.judge("enforce", [rec], False)
+        self.assertTrue(any("expected the policy to allow it" in p for p in problems))
+
+    def test_a_contained_attempt_that_failed_to_run_is_a_problem(self):
+        rec = record(CONTAINED, "bypass", None, completes)
+        self.assertTrue(any("ESCAPED or failed to run" in p for p in run_agent.judge("bypass", [rec], False)))
+
+    def test_a_killed_attempt_counts_as_stopped(self):
+        rec = record(CONTAINED, "enforce", policy_allows, killed)
+        self.assertEqual(run_agent.judge("enforce", [rec], False), [])
+
+    def test_the_task_is_in_the_record_and_in_the_request_hash_only_when_there_is_one(self):
+        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa")
+        with_task = run_agent.audit_action(log, record(CONTAINED, "enforce", policy_allows, is_blocked), "a" * 64, "opa")
+        without = run_agent.audit_action(log, record(LEGIT, "enforce", policy_allows, completes), "a" * 64, "opa")
+        self.assertEqual(with_task["request"], {"action": "run_generated_code", "tool": None, "task": "escape"})
+        self.assertEqual(without["request"], {"action": "read_synthetic_data", "tool": None})
+
+    def test_two_tasks_of_the_same_action_are_two_different_requests(self):
+        log = run_agent.start_log("enforce", b"[]", "a" * 64, "opa")
+        a = run_agent.audit_action(log, record(GENERATED, "enforce", policy_allows, completes), "a" * 64, "opa")
+        b = run_agent.audit_action(log, record(CONTAINED, "enforce", policy_allows, is_blocked), "a" * 64, "opa")
+        self.assertNotEqual(a["request_sha256"], b["request_sha256"])
+
+    def test_the_audit_gate_notices_the_wrong_task(self):
+        plan = [GENERATED, CONTAINED]
+        log = run_agent.start_log("enforce", json.dumps(plan).encode(), "a" * 64, "opa")
+        for item in (GENERATED, GENERATED):  # the agent ran the harmless script twice instead of the planned one
+            rec, _ = run_agent.evaluate(item, "enforce", decide_fn=policy_allows, run_fn=completes)
+            run_agent.audit_action(log, rec, "a" * 64, "opa")
+        run_agent.finish_log(log)
+        self.assertTrue(any("not the actions planned" in p for p in audit_verify.verify(log.records, log.manifest(), plan)))
+
+    def test_the_task_reaches_the_container(self):
+        from unittest import mock
+
+        seen = []
+
+        def fake(command, **kw):
+            seen.append(command)
+            return mock.Mock(returncode=0, stdout=json.dumps({"action": "x", "result": "blocked", "detail": "d"}), stderr="")
+
+        with mock.patch.object(run_agent.subprocess, "run", fake):
+            run_agent.run_sandbox(CONTAINED)
+        self.assertEqual(seen[0][-2:], ["run_generated_code", "escape"])
+
+    def test_the_plan_has_one_harmless_and_one_hostile_generated_script(self):
+        plan = json.loads((run_agent.ROOT / "agent" / "plan.json").read_text(encoding="utf-8"))
+        generated = [(i.get("task"), i["kind"]) for i in plan if i["action"] == "run_generated_code"]
+        self.assertEqual(generated, [("analysis", "legit"), ("escape", "contained")])
+
+
+class GeneratedSource(unittest.TestCase):
+    """The script text the sandbox writes and runs. Run here on a copy of the synthetic data, outside a container."""
+
+    def actions(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("sandbox_actions", run_agent.ROOT / "agent" / "sandbox" / "actions.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_analysis_is_made_from_the_header_of_the_data_and_runs(self):
+        import subprocess
+        import sys
+        from unittest import mock
+
+        module = self.actions()
+        data = run_agent.SYNTHETIC_DIR / "churn.csv"
+        real_open = open
+        with mock.patch("builtins.open", lambda p, *a, **k: real_open(data if str(p) == "/data/churn.csv" else p, *a, **k)):
+            source = module.generated_source("analysis")
+        self.assertIn("tenure_months", source)
+        self.assertNotIn("customer_id", source.split("for name in")[1].split(":")[0])
+        done = subprocess.run([sys.executable, "-c", source.replace("/data/churn.csv", str(data))], capture_output=True, text=True, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("monthly_spend churned", done.stdout)
+        self.assertIn("monthly_spend stayed", done.stdout)
+
+    def test_the_hostile_script_tries_the_four_ways_out_and_says_so_when_one_works(self):
+        source = self.actions().generated_source("escape")
+        for needle in ("1.1.1.1", "/regulated/customers.csv", "/tmp/generated-escape", "setuid"):
+            self.assertIn(needle, source)
+        self.assertIn("ESCAPED:", source)
+
+    def test_an_unknown_task_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.actions().generated_source("something else")
+
+    def test_a_script_that_prints_ESCAPED_makes_the_action_report_an_escape(self):
+        from unittest import mock
+
+        module = self.actions()
+        done = mock.Mock(stdout="ESCAPED: network\nESCAPED: privilege\n", stderr="", returncode=0)
+        with mock.patch.object(module, "generated_source", return_value="x"), mock.patch.object(module.subprocess, "run", return_value=done), \
+                mock.patch("builtins.open", mock.mock_open()):
+            result, detail, source = module.run_generated_code("escape")
+        self.assertEqual(result, "escaped")
+        self.assertIn("network", detail)
+        self.assertEqual(source, "x")
+
+    def test_a_script_that_prints_nothing_for_the_escape_task_was_blocked(self):
+        from unittest import mock
+
+        module = self.actions()
+        done = mock.Mock(stdout="", stderr="", returncode=0)
+        with mock.patch.object(module, "generated_source", return_value="x"), mock.patch.object(module.subprocess, "run", return_value=done), \
+                mock.patch("builtins.open", mock.mock_open()):
+            self.assertEqual(module.run_generated_code("escape")[0], "blocked")
+
+    def test_a_harmless_script_that_fails_is_an_error_not_a_pass(self):
+        from unittest import mock
+
+        module = self.actions()
+        done = mock.Mock(stdout="", stderr="boom", returncode=1)
+        with mock.patch.object(module, "generated_source", return_value="x"), mock.patch.object(module.subprocess, "run", return_value=done), \
+                mock.patch("builtins.open", mock.mock_open()):
+            self.assertEqual(module.run_generated_code("analysis")[0], "error")
 
 
 if __name__ == "__main__":
