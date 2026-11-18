@@ -53,9 +53,9 @@ the escape test below is what shows whether the stronger runtime still holds.
 ## How it is proven
 
 The workflow `Agent sandbox escape test` runs the scripted agent twice. With the policy switched on, only allowed
-actions run. With the policy switched **off**, every action runs in the sandbox, including seven attempts to get
-out (network, regulated data, writing outside the workspace, privileged operations, changing the policy, a process
-flood, a memory flood). The run fails if any attempt works, if a legitimate action does not complete, or if the
+actions run. With the policy switched **off**, every action runs in the sandbox, including eight attempts to get
+out (a tool outside the scope, network, regulated data, writing outside the workspace, privileged operations, changing
+the policy, a process flood, a memory flood). The run fails if any attempt works, if a legitimate action does not complete, or if the
 canary planted in the regulated stand-in appears anywhere in the output. The enforcement point's own tests check
 that the judge does say "no" in each of those cases.
 
@@ -74,3 +74,18 @@ removed together, so the test cannot say which of them does the work.
 - The records of each run are a first form of the audit record, kept for 90 days as a build artifact. They are not
   yet immutable; that is the audit store's job.
 - One run uses one container: the cost of a run is the cost of a few seconds of a throwaway runner.
+
+## Code the agent writes at run time
+
+The first version ran a fixed list of functions, so "an agent runs generated code" was not shown. The action
+`run_generated_code` closes that: inside the sandbox the agent writes a script into the workspace, from a task and from the
+header of the data it finds, and runs it under the same limits. The plan has two. `analysis` is harmless and must complete.
+`escape` is what a hijacked agent would write (reach the network, open the regulated file, write outside the workspace, become
+root) and must be stopped.
+
+What this shows, and what it does not. The policy **allows** both, because a policy over action names cannot read a script;
+the plan marks the second `contained`, and the judge requires that the policy allowed it, that it ran, and that the sandbox
+stopped it. That is the point of imposing containment twice. What it does not show: the scripts are templates inside the
+scripted agent, not text produced by a language model, so this proves the mechanism (code that did not exist before the run
+starts, runs contained) and not what a model would write. A request now carries an optional `task`, recorded only when there
+is one so that earlier logs still verify, and the audit gate compares it with the plan.

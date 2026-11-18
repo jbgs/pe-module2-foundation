@@ -108,3 +108,16 @@ test_an_agent_cannot_approve_the_export_of_its_own_result if {
 test_changing_the_policy_is_never_autonomous if {
 	policy.decision.effect != "allow" with input as {"agent": agent, "action": "modify_policy"}
 }
+
+# The policy cannot tell a harmless generated script from a hostile one, so it allows both. The sandbox is what contains
+# the second, and that is tested in agent/ (the attempt must run and be stopped), not here.
+test_generated_code_is_allowed_whatever_the_task if {
+	every task in {"analysis", "escape"} {
+		policy.decision.effect == "allow" with input as {"agent": agent, "action": "run_generated_code", "task": task}
+	}
+}
+
+test_generated_code_is_not_a_way_around_the_gates if {
+	policy.decision.effect == "gate" with input as {"agent": agent, "action": "export_result", "task": "analysis"}
+	policy.decision.effect == "deny" with input as {"agent": agent, "action": "network_egress", "task": "analysis"}
+}

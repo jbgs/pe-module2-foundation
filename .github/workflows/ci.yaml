@@ -147,7 +147,7 @@ jobs:
       - name: Tests
         run: opa test policy/ -v
 
-      # A test of the tests: the policy is weakened on purpose in 12 ways, and the tests must notice each one.
+      # A test of the tests: the policy is weakened on purpose in 13 ways, and the tests must notice each one.
       - name: The tests catch a weakened policy
         run: python3 policy/mutation_check.py
 

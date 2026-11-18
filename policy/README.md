@@ -72,8 +72,8 @@ add nothing, so there is none. There is also one approver, `jbgs`: adding anothe
 
 ## What the tests prove
 
-19 tests, and the tests themselves are tested: [`mutation_check.py`](mutation_check.py) weakens the policy on purpose in
-12 ways and requires the tests to notice each one. It runs in the CI job `Policy tests`, so the claim is reproducible.
+21 tests, and the tests themselves are tested: [`mutation_check.py`](mutation_check.py) weakens the policy on purpose in
+13 ways and requires the tests to notice each one. It runs in the CI job `Policy tests`, so the claim is reproducible.
 The weakenings are: an agent that approves its own action; an approver outside the list; a negative approval that passes;
 forbidden actions that stop being classified; a gated action that becomes autonomous (two of them, `modify_policy` and
 `export_result`); an out-of-scope tool that is never denied; a tool-scope check that always passes (in two different

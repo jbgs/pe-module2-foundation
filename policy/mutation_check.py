@@ -31,6 +31,7 @@ MUTANTS = [
     ("modify_policy is no longer gated", '\t"export_result",\n\t"modify_policy",\n}', '\t"export_result",\n}'),
     ("export_result is no longer gated", '\t"deploy_dev",\n\t"export_result",\n', '\t"deploy_dev",\n'),
     ("an out-of-scope tool is never denied", "\tnot tool_in_scope\n", "\tfalse\n"),
+    ("generated code is no longer allowed", '\t"run_generated_code",\n}', "}"),
     ("the default allows", '"effect": "deny",\n\t"class": "unlisted"', '"effect": "allow",\n\t"class": "unlisted"'),
     ("the tool scope check always passes", "\ttool_in_scope\n}", "\ttrue\n}"),
     ("the tool scope helper is always true", "tool_in_scope if input.tool in approved_tools", "tool_in_scope if true"),
