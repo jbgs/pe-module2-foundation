@@ -1,0 +1,9 @@
+{
+  "schema": "agent-audit-manifest/1",
+  "run_id": "44314122726-1-weakening",
+  "mode": "weakening",
+  "records": 8,
+  "head_sha256": "c2c717e07acac4b51fddaa6dd2b6b18e01e25b9586073155fc75434c8419f7da",
+  "first_timestamp": "2026-11-18T13:33:09Z",
+  "last_timestamp": "2026-11-18T13:33:14Z"
+}
