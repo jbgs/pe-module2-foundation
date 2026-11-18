@@ -184,8 +184,42 @@ def start_log(mode: str, plan_bytes: bytes, sha: str, engine: str, out: Path | N
         # The environment of the golden path that this run belongs to, with the hash of the data and the policy it was made
         # with. A run without one is going around the path.
         environment={"id": environment, "template_sha256": environment_hash} if environment else None,
+        # This log raises an alert for every attempt that was stopped (see alert_for). The negative controls make attempts
+        # succeed on purpose, so they alert on nothing, and a log that does not say it alerts is not required to.
+        alerting=(mode != "weakening"),
     )
     return log
+
+
+def alert_for(rec: dict) -> dict | None:
+    """What an attempt that was stopped, or that got out, must raise. A legitimate action, and a gate waiting for a person,
+    raise nothing. Severity is 'critical' when the sandbox failed, 'warning' when something held."""
+    if rec["outcome"] == "escaped":
+        return {"severity": "critical", "why": "an attempt got out of the sandbox: " + rec["detail"]}
+    if rec["outcome"] in ("blocked", "killed"):
+        return {"severity": "warning", "why": "the sandbox stopped an attempt: " + rec["detail"]}
+    if (rec.get("policy") or {}).get("effect") == "deny":
+        return {"severity": "warning", "why": "the policy denied the action: " + (rec["policy"].get("reason") or "")}
+    return None
+
+
+def annotation(rec: dict) -> str:
+    """The line the CI service shows on the page of the run, where somebody looking at the run sees it."""
+    alert = rec["alert"]
+    level = "error" if alert["severity"] == "critical" else "warning"
+    name = rec["action"] + (f" ({rec['tool'] or rec['task']})" if rec.get("tool") or rec.get("task") else "")
+    return f"::{level} title=Sandbox alert ({alert['severity']})::{name}: {alert['why']}"
+
+
+def alerts_section(records: list[dict]) -> str:
+    alerts = [r for r in records if r.get("alert")]
+    if not alerts:
+        return "### Alerts\n\nNone raised.\n"
+    lines = [f"### Alerts: {len(alerts)} raised", "", "| Severity | Action | Why |", "|---|---|---|"]
+    for r in alerts:
+        name = r["action"] + (f" ({r['tool'] or r['task']})" if r.get("tool") or r.get("task") else "")
+        lines.append(f"| {r['alert']['severity']} | `{name}` | {r['alert']['why']} |")
+    return "\n".join(lines) + "\n"
 
 
 def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: str | None = None) -> dict:
@@ -225,6 +259,10 @@ def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: 
         "duration_ms": rec["ms"],
         "flags_sha256": flags_sha256(weaken) if rec["executed"] else None,
     }
+    extra = {}
+    alert = None if weaken else alert_for(rec)  # an attempt that is made to succeed on purpose is not an incident
+    if alert:
+        extra["alert"] = alert  # only when raised, so that logs made before alerts existed still verify
     return log.append(
         "action",
         agent={"id": AGENT_ID, "kind": "scripted"},
@@ -233,6 +271,7 @@ def audit_action(log: audit.AuditLog, rec: dict, sha: str, engine: str, weaken: 
         policy=policy,
         approval=approval,
         execution=execution,
+        **extra,
     )
 
 
@@ -474,7 +513,7 @@ def summary(mode: str, records: list[dict], problems: list[str]) -> str:
         lines.append(f"| `{name}` | {policy} | {'yes' if rec['executed'] else 'no'} | {rec['outcome']} | {rec['detail']} |")
     lines += ["", "**Result: " + ("every expectation held.**" if not problems else "FAILED.**")]
     lines += [f"- {p}" for p in problems]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n\n" + alerts_section(records)
 
 
 def run_controls(out: Path, sha: str, engine: str) -> int:
@@ -557,10 +596,10 @@ def _main(argv: list[str] | None = None) -> int:
         record, text = evaluate(item, args.mode, approval=approval)
         record["policy_sha256"] = sha
         records.append(record)
-        audit_action(log, record, sha, engine)
+        record["alert"] = audit_action(log, record, sha, engine).get("alert")
         everything += text
-        if record["kind"] in ("attempt", "contained") and record["outcome"] in ("blocked", "killed") and (args.mode == "bypass" or record["kind"] == "contained"):
-            print(f"::warning title=Escape attempt blocked::{record['action']}: {record['detail']}")
+        if record["alert"]:
+            print(annotation(record))
         elif record["kind"] != "legit" and args.mode == "enforce" and not record["executed"]:
             print(f"::notice title=Policy stopped an action::{record['action']}: {record['detail']}")
 

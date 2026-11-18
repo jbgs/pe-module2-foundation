@@ -57,7 +57,29 @@ def missing(obj, keys) -> list[str]:
     return [key for key in keys if not isinstance(obj, dict) or key not in obj]
 
 
-def check_action(rec: dict, mode: str, agent_id: str, policy_sha: str) -> list[str]:
+ALERT_SEVERITIES = ("warning", "critical")
+
+
+def check_alert(rec: dict, where: str) -> list[str]:
+    """A log that says it alerts must alert on every attempt that was stopped, and say 'critical' when one got out."""
+    outcome, effect = rec["execution"]["outcome"], rec["policy"]["effect"]
+    alert = rec.get("alert")
+    if outcome == "escaped":
+        wanted = "critical"
+    elif outcome in ("blocked", "killed") or effect == "deny":
+        wanted = "warning"
+    else:
+        wanted = None
+    if wanted is None:
+        return [f"{where}: an alert for something that needed none"] if alert is not None else []
+    if not isinstance(alert, dict) or not alert.get("why"):
+        return [f"{where}: {outcome if outcome != 'not run' else effect}, with no alert"]
+    if alert.get("severity") != wanted:
+        return [f"{where}: the alert says {alert.get('severity')!r}, and it should say {wanted!r}"]
+    return []
+
+
+def check_action(rec: dict, mode: str, agent_id: str, policy_sha: str, alerting: bool = False) -> list[str]:
     where = f"seq {rec['seq']} ({(rec['request'] or {}).get('action')})"
     problems = []
     for name, keys in (("policy", POLICY_KEYS), ("approval", APPROVAL_KEYS), ("execution", EXECUTION_KEYS)):
@@ -104,6 +126,8 @@ def check_action(rec: dict, mode: str, agent_id: str, policy_sha: str) -> list[s
             problems.append(f"{where}: a human-gated action ran without an approval from someone other than the agent")
     elif approval["required"] is not False or approval["status"] != "not_required":
         problems.append(f"{where}: an approval is recorded for an action that needs none")
+    if alerting:
+        problems += check_alert(rec, where)
     return problems
 
 
@@ -165,7 +189,7 @@ def verify(records: list[dict], manifest: dict | None = None, plan: list[dict] |
     agent_id = first["agent"].get("id")
     actions = [r for r in records if r["event"] == "action"]
     for rec in actions:
-        problems += check_action(rec, mode, agent_id, first["policy_sha256"])
+        problems += check_action(rec, mode, agent_id, first["policy_sha256"], alerting=first.get("alerting") is True)
     summary = records[-1]["summary"]
     absent = missing(summary, SUMMARY_KEYS)
     if absent:
